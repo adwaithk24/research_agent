@@ -6,9 +6,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, HTTPException, status, BackgroundTasks, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+import logging
 
-from pipelines import (
+logger = logging.getLogger(__name__)
+from pydantic import BaseModel, Field
+from typing import Optional
+
+from .llm_manager import LLMManager  
+from .pipelines import (
+    store_uploaded_pdf,
+    get_pdf_content,
+    validate_pdf_id,
     standardize_docling,
     standardize_markitdown,
     html_to_md_docling,
@@ -25,6 +33,23 @@ app = FastAPI()
 
 class URLRequest(BaseModel):
     url: str
+
+class PDFSelection(BaseModel):
+    pdf_id: str = Field(..., min_length=8, max_length=24)
+
+class PDFUploadResponse(BaseModel):
+    pdf_id: str
+    status: str
+    message: Optional[str] = None
+
+class SummaryRequest(BaseModel):
+    pdf_id: str = Field(..., min_length=8, max_length=100)
+    summary_length: int = Field(200, gt=50, lt=1000)
+
+class QuestionRequest(BaseModel):
+    pdf_id: str
+    question: str = Field(..., min_length=10)
+    max_tokens: int = Field(500, gt=100, lt=2000)
 
 
 @app.post("/processurl/", status_code=status.HTTP_200_OK)
@@ -358,6 +383,102 @@ async def process_url_enterprise(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+   
+
+@app.post("/select_pdfcontent", status_code=status.HTTP_200_OK)
+async def select_pdf_content(request: PDFSelection):
+    try:
+        if not validate_pdf_id(request.pdf_id):
+            raise HTTPException(status_code=404, detail="Invalid PDF ID")
+        
+        # Validate PDF ID first
+        if not validate_pdf_id(request.pdf_id):
+            logger.error(f"Invalid PDF ID: {request.pdf_id}")
+            raise HTTPException(status_code=400, detail="Invalid PDF ID")
+    
+        content = get_pdf_content(request.pdf_id)
+        return {
+                "pdf_id": request.pdf_id,
+                "content": content[:5000],  # Return first 5k chars for preview
+                "metadata": {"pages": len(content.split('\n\f'))}
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/upload_pdf", status_code=status.HTTP_201_CREATED)
+async def upload_pdf(file: UploadFile):
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Invalid file type")
+
+    try:
+        contents = await file.read()
+        pdf_id = store_uploaded_pdf(contents)
+        return PDFUploadResponse(
+            pdf_id=pdf_id,
+            status="success",
+            message=f"PDF stored with ID: {pdf_id}"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await file.close()
+
+@app.post("/summarize/", response_model=dict)
+async def generate_summary(request: SummaryRequest):
+    logger = logging.getLogger(__name__)
+
+    try:
+        # Validate PDF ID first
+        if not validate_pdf_id(request.pdf_id):
+            logger.error(f"Invalid PDF ID: {request.pdf_id}")
+            raise HTTPException(status_code=400, detail="Invalid PDF ID")
+    
+        llm_manager = LLMManager()
+        content = get_pdf_content(request.pdf_id)
+        logger.info(f"Retrieved {len(content)} characters for PDF {request.pdf_id}")
+    except FileNotFoundError as e:
+        logger.error(f"PDF content lookup failed: {str(e)}")
+        raise HTTPException(status_code=404, detail="PDF content not found")
+        
+    try:
+        summary = await llm_manager.get_summary(
+            text=content,
+            max_tokens=request.summary_length
+        )
+        return {"summary": summary, "tokens_used": len(summary.split())}
+    except Exception as e:
+        logger.error(f"LLM processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Summary generation failed")
+
+@app.post("/ask_question", status_code=status.HTTP_200_OK)
+async def answer_pdf_question(request: QuestionRequest):
+    logger = logging.getLogger(__name__)
+    try:
+        # Validate PDF ID first
+        if not validate_pdf_id(request.pdf_id):
+            logger.error(f"Invalid PDF ID: {request.pdf_id}")
+            raise HTTPException(status_code=400, detail="Invalid PDF ID")
+
+        llm_manager = LLMManager()
+        content = get_pdf_content(request.pdf_id)
+        logger.info(f"Retrieved {len(content)} characters for PDF {request.pdf_id}")
+    except FileNotFoundError as e:
+        logger.error(f"PDF content lookup failed: {str(e)}")
+        raise HTTPException(status_code=404, detail="PDF content not found")
+    
+    try:
+        answer = await llm_manager.ask_question(
+            context=content,
+            question=request.question,
+            max_tokens=request.max_tokens
+        )
+        return {
+            "question": request.question,
+            "answer": answer,
+            "source_pdf": request.pdf_id
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def create_zip_archive(result, include_markdown, include_images, include_tables):
     flag = False
@@ -399,5 +520,6 @@ def create_zip_archive(result, include_markdown, include_images, include_tables)
 
 
 def my_background_task():
+    logger.info("Running background maintenance tasks")
     clean_temp_files()
     print("Performed cleanup of temp files.")

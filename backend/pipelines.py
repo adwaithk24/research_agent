@@ -1,17 +1,20 @@
 import os
 import shutil
+import logging
 import uuid
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import requests
 from docling.document_converter import DocumentConverter
 from markitdown import MarkItDown
 
-from cloud_ops import upload_file_to_s3, upload_directory_to_s3
-from firecrawl_code import firecrawl
-from llamaparser_pdf import llama_parse_pdf
-from python_pdf_extraction import extract_text_with_docling, extract_images_to_folder, extract_tables_with_docling
-from webscraper import WebScraper
+from .cloud_ops import upload_file_to_s3, upload_directory_to_s3
+from .firecrawl_code import firecrawl
+from .llamaparser_pdf import llama_parse_pdf
+from .python_pdf_extraction import extract_text_with_docling, extract_images_to_folder, extract_tables_with_docling
+from .webscraper import WebScraper
 
 base_dir = Path('./temp_processing')
 output = base_dir / Path('output')
@@ -19,6 +22,45 @@ s3_bucket = 'neu-pdf-webpage-parser'
 s3_pdf_input_prefix = 'pdfs/raw'
 s3_html_input_prefix = 'html/raw'
 
+def store_uploaded_pdf(pdf_content: bytes) -> str:
+    """Store uploaded PDF and convert to markdown for LLM processing"""
+    logger = logging.getLogger(__name__)
+    """Store uploaded PDF and convert to markdown for LLM processing"""
+    pdf_id = str(uuid.uuid4())
+    os.makedirs(output, exist_ok=True)
+    
+    # Save original PDF
+    pdf_path = output / f'{pdf_id}.pdf'
+    with open(pdf_path, 'wb') as f:
+        f.write(pdf_content)
+    
+    # Convert to markdown using existing pipeline
+    markdown_output = pdf_to_md_docling(pdf_path, pdf_id)
+    markdown_path = output / f'{pdf_id}.md'
+    
+    if not markdown_output.get('markdown'):
+        logger.error(f'Markdown generation failed for PDF {pdf_id}')
+        raise ValueError('Failed to generate markdown content')
+    
+    shutil.move(str(markdown_output['markdown']), str(markdown_path))
+    logger.info(f'Stored PDF {pdf_id} at {markdown_path}')
+    return pdf_id
+
+
+def get_pdf_content(pdf_id: str) -> str:
+    """Retrieve stored markdown content for LLM processing"""
+    markdown_path = output / f'{pdf_id}.md'
+    if not markdown_path.exists():
+        raise FileNotFoundError(f"No content found for PDF ID: {pdf_id}")
+    
+    with open(markdown_path, 'r') as f:
+        return f.read()
+
+
+def validate_pdf_id(pdf_id: str) -> bool:
+    """Validate if PDF ID exists in the storage system"""
+    pdf_path = output / f'{pdf_id}.pdf'
+    return pdf_path.exists()
 
 def html_to_md_docling(url: str, job_name: uuid):
     s3_prefix_text = 'html/html-parser/extracted-text'
