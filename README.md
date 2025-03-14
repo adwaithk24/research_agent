@@ -1,96 +1,160 @@
-# **ParseForge: Automating Text Extraction from PDFs and URLs**
+# Miriel: PDF Content Analysis with LLM Integration
 
 ## **Introduction**
 
-This project demonstrates the functionality of a context extraction tool that extracts structured information from unstructured data sources like PDFs and web pages. The tool allows users to test and compare the performance of **open-source** and **enterprise-grade parsers**, providing insights into their efficiency, accuracy, and feasibility.
+Miriel is an advanced document processing application that combines PDF parsing capabilities with Large Language Model (LLM) integration to provide intelligent document analysis, summarization, and question-answering features.
 
-### **Key Features**
-- **Dual Processing Modes**:
-  - 🐍 Open-Source Stack (PyMuPDF, BeautifulSoup, Docling).
-  - 🚀 Enterprise Solutions (LlamaParser, Firecrawl).
-- **Multi-Format Support**: Extracts text, images, tables, and metadata from PDFs and web pages.
-- **Smart Output Options**: Choose between Markdown-only or bundled ZIP files containing multiple components.
-- **Cloud Integration**: Uses AWS S3 for secure storage of raw inputs and processed outputs.
+## 🌟 Features
 
----
+- **PDF Processing**
 
-## **Initial Setup**
+  - Parse PDFs into structured markdown content
+  - Extract text, tables, and images
+  - Store processed content for future use
 
-### **Prerequisites**
-1. Install Python (>= 3.8) on your system.
-2. Install Docker (for containerized deployment).
-3. Set up an AWS account for S3 storage (if running locally).
+- **LLM Integration**
 
-### **Installation**
+  - Multiple LLM model selection (via LiteLLM)
+  - Document summarization
+  - Question-answering based on document content
+  - Token usage tracking and cost estimation
+
+- **User Interface**
+  - Clean, modern web interface
+  - Chat-based interaction
+  - Real-time processing feedback
+  - Document history management
+
+## 🏗️ Architecture
+
+```mermaid
+graph TD
+    A[Streamlit Frontend] --> B[FastAPI Backend]
+    B --> C[LiteLLM]
+    B --> D[Redis Streams]
+    C --> E[Various LLM Providers]
+    B --> F[PDF Processing Service]
+    F --> G[Document Store]
+    D --> H[Background Workers]
+```
+
+## 🔧 Technical Stack
+
+- **Frontend**: Streamlit
+- **Backend**: FastAPI
+- **LLM Management**: LiteLLM
+- **Message Queue**: Redis Streams
+- **PDF Processing**:
+  - Custom Python Parser (PyMuPDF, Docling)
+  - Llama Parser (Enterprise)
+- **Containerization**: Docker & Docker Compose
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Python 3.11+
+- Docker & Docker Compose
+- Redis
+- API keys for LLM providers
+
+### Environment Setup
+
 1. Clone the repository:
-```
-git clone https://github.com/your-repo/parse-forge.git
-cd parse-forge
+
+```bash
+git clone https://github.com/yourusername/miriel.git
+cd miriel
 ```
 
-2. Install dependencies:
+2. Create and activate a virtual environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
+
+3. Install dependencies:
+
+```bash
 pip install -r requirements.txt
 ```
 
+4. Set up environment variables:
 
-3. Set up environment variables by creating a `.env` file in the root directory (see sample below).
-
-4. Run the application:
-- **Frontend (Streamlit):**
-  ```
-  streamlit run app.py
-  ```
-- **Backend (FastAPI):**
-  ```
-  uvicorn api:app --reload
-  ```
-
-5. Access the application:
-- Streamlit Frontend: `http://localhost:8501`
-- FastAPI Backend: `http://localhost:8000/docs`
-
----
-
-## **Sample `.env` File**
-
-Create a `.env` file in the root directory with the following structure:
-AWS Configuration
-```
-AWS_ACCESS_KEY_ID=<your_aws_access_key>
-AWS_SECRET_ACCESS_KEY=<your_aws_secret_key>
-AWS_REGION=<your_aws_region>
-S3_BUCKET_NAME=<your_s3_bucket_name>
-```
-FastAPI Configuration
-```
-FASTAPI_URL=<link_to_FASTAPI>
-```
-Enterprise API Keys
-```
-LLAMAPARSER_API_KEY=<your_llamaparser_api_key>
-FIRECRAWL_API_KEY=<your_firecrawl_api_key>
+```bash
+cp .env.example .env
+# Edit .env with your API keys and configuration
 ```
 
-Replace `<your_aws_access_key>` and other placeholders with your actual credentials.
+### Running with Docker
 
----
+1. Build and start the services:
 
-## **Links**
+```bash
+docker-compose up --build
+```
 
-### Assignment 1 Links:
-- **FastAPI Backend**: [https://nehadevarapalli-parseforge.hf.space/](https://nehadevarapalli-parseforge.hf.space/)  
-- **Streamlit Frontend**: [https://parse-forge.streamlit.app](https://parse-forge.streamlit.app)  
-- **GitHub Project**: [https://github.com/users/nehadevarapalli/projects/2](https://github.com/users/nehadevarapalli/projects/2)  
+2. Access the application:
+
+- Frontend: http://localhost:8501
+- API Documentation: http://localhost:8000/docs
+
+## 📁 Project Structure
+
+```
+miriel/
+├── frontend/
+│   ├── app.py                 # Streamlit application
+│   ├── pages/                 # Additional pages
+│   └── requirements.txt       # Frontend dependencies
+├── backend/
+│   ├── api.py                # FastAPI application
+│   ├── llm_manager.py        # LiteLLM integration
+│   ├── pdf_processor.py      # PDF processing logic
+│   └── requirements.txt      # Backend dependencies
+├── docker/
+│   ├── Dockerfile.frontend
+│   ├── Dockerfile.backend
+│   └── docker-compose.yml
+└── README.md
+```
+
+## 🔄 API Endpoints
+
+### PDF Management
+
+- `POST /select_pdfcontent`: Select previously parsed PDF content
+- `POST /upload_pdf`: Upload and process new PDF documents
+
+### LLM Integration
+
+- `POST /summarize`: Generate document summaries
+- `POST /ask_question`: Process questions about document content
+
+### Model Management
+
+- `GET /models`: List available LLM models
+- `POST /select_model`: Select LLM model for processing
+
+## LLMs Integrated
+
+- [GPT-4O](https://platform.openai.com/docs/guides/gpt/gpt-models)
+- [Gemini - Flash](https://docs.aimlapi.com/api-references/text-models-llm/google/gemini-2.0-flash-exp)
+- [DeepSeek](https://api-docs.deepseek.com/)
+- [Claude](https://docs.anthropic.com/en/docs/welcome)
+- [Grok](https://docs.x.ai/docs/tutorial)
+
+## Project Deliverables
+
+- **FastAPI Backend**: [https://nehadevarapalli-parseforge.hf.space/](https://nehadevarapalli-parseforge.hf.space/)
+- **Streamlit Frontend**: [https://parse-forge.streamlit.app](https://parse-forge.streamlit.app)
+- **GitHub Project**: [https://github.com/users/nehadevarapalli/projects/2](https://github.com/users/nehadevarapalli/projects/2)
 - **Codelabs Documentation**: [https://codelabs-preview.appspot.com/?file_id=1SZHxAEETpt6-INannVHcy-WhCiZ-rmFsuChKF19sKO8#0](https://codelabs-preview.appspot.com/?file_id=1SZHxAEETpt6-INannVHcy-WhCiZ-rmFsuChKF19sKO8#0)
 - **Demo Video**: [Youtube](https://www.youtube.com/watch?v=nrw8KiRCwU4)
 
----
+## Workflow
 
-## **How It Works**
-
-1. Upload a PDF or input a webpage URL.
-2. Choose between open-source or enterprise parsers.
-3. Select specific components to extract (e.g., text, images, tables).
-4. Process the content and download the output as Markdown or a ZIP bundle.
-
+1. Upload a PDF via API or frontend or select from exisiting uploads
+2. Create a chat thread with selected PDF
+3. Ask questions on the PDF content (e.g. Generate Summary)
