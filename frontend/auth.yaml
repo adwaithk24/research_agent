@@ -12,9 +12,13 @@ credentials:
       password: $2b$12$ikDPeKKAD/SurO2.hbgAg.BslG8rI5xYuWjRWy9qzG4wQ747t/lxe
     jsmith:
       email: jsmith@gmail.com
+      failed_login_attempts: 0
+      logged_in: false
       name: John Smith
       password: $2b$12$ikDPeKKAD/SurO2.hbgAg.BslG8rI5xYuWjRWy9qzG4wQ747t/lxe
     rbriggs:
       email: rbriggs@gmail.com
+      failed_login_attempts: 0
+      logged_in: false
       name: Rebecca Briggs
       password: $2b$12$ikDPeKKAD/SurO2.hbgAg.BslG8rI5xYuWjRWy9qzG4wQ747t/lxe
