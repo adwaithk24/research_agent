@@ -6,22 +6,30 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, HTTPException, status, BackgroundTasks, Query
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    HTTPException,
+    status,
+    BackgroundTasks,
+    Query,
+    File,
+)
 from fastapi.responses import FileResponse, StreamingResponse
 import logging
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
 
-from .llm_manager import LLMManager  
-from .redis_manager import (
-    send_to_redis_stream, 
+from llm_manager import LLMManager
+from redis_manager import (
+    send_to_redis_stream,
     store_pdf_content,
     get_pdf_content,
-    receive_llm_response
+    receive_llm_response,
 )
-from .pipelines import (
+from pipelines import (
     store_uploaded_pdf,
     get_pdf_content,
     validate_pdf_id,
@@ -32,7 +40,7 @@ from .pipelines import (
     pdf_to_md_docling,
     clean_temp_files,
     pdf_to_md_enterprise,
-    html_to_md_enterprise
+    html_to_md_enterprise,
 )
 
 load_dotenv()
@@ -41,20 +49,22 @@ app = FastAPI()
 # LLM Service instance
 llm_service = None
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     global llm_service
     from .llm_service import LLMService
-    
+
     llm_service = LLMService()
     asyncio.create_task(llm_service.start())
     logger.info("LLM Service started")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down LLM Service")
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -62,19 +72,23 @@ app = FastAPI(lifespan=lifespan)
 class URLRequest(BaseModel):
     url: str
 
+
 class PDFSelection(BaseModel):
     pdf_id: str = Field(..., min_length=8, max_length=24)
+
 
 class PDFUploadResponse(BaseModel):
     pdf_id: str
     status: str
     message: Optional[str] = None
 
+
 class SummaryRequest(BaseModel):
     pdf_id: str = Field(..., min_length=8, max_length=100)
     summary_length: int = Field(200, gt=50, lt=1000)
     max_tokens: int = Field(500, gt=100, lt=2000)
-    
+
+
 class QuestionRequest(BaseModel):
     pdf_id: str
     question: str = Field(..., min_length=10)
@@ -83,11 +97,11 @@ class QuestionRequest(BaseModel):
 
 @app.post("/processurl/", status_code=status.HTTP_200_OK)
 async def process_url(
-        background_tasks: BackgroundTasks,
-        request: URLRequest,
-        include_markdown: bool = Query(False),
-        include_images: bool = Query(False),
-        include_tables: bool = Query(False),
+    background_tasks: BackgroundTasks,
+    request: URLRequest,
+    include_markdown: bool = Query(False),
+    include_images: bool = Query(False),
+    include_tables: bool = Query(False),
 ):
     if not any([include_markdown, include_images, include_tables]):
         raise HTTPException(
@@ -100,14 +114,17 @@ async def process_url(
         background_tasks.add_task(my_background_task)
 
         if include_images or include_tables:  # images or tables are requested
-            flag, zip_buffer, messages = create_zip_archive(result, include_markdown, include_images, include_tables)
+            flag, zip_buffer, messages = create_zip_archive(
+                result, include_markdown, include_images, include_tables
+            )
             if flag:
                 return StreamingResponse(
                     zip_buffer,
                     media_type="application/zip",
                     headers={
                         "Content-Disposition": f"attachment; filename={job_name}.zip"
-                    })
+                    },
+                )
             else:
                 raise HTTPException(status_code=500, detail=messages)
         else:
@@ -119,9 +136,7 @@ async def process_url(
             return FileResponse(
                 result["markdown"],
                 media_type="application/octet-stream",
-                headers={
-                    "Content-Disposition": f"attachment; filename={job_name}.md"
-                },
+                headers={"Content-Disposition": f"attachment; filename={job_name}.md"},
                 filename=f"{job_name}.md",
             )
 
@@ -131,11 +146,11 @@ async def process_url(
 
 @app.post("/processpdf/", status_code=status.HTTP_200_OK)
 async def process_pdf(
-        background_tasks: BackgroundTasks,
-        file: UploadFile,
-        include_markdown: bool = Query(False),
-        include_images: bool = Query(False),
-        include_tables: bool = Query(False),
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    include_markdown: bool = Query(False),
+    include_images: bool = Query(False),
+    include_tables: bool = Query(False),
 ):
     if not any([include_markdown, include_images, include_tables]):
         raise HTTPException(
@@ -160,8 +175,9 @@ async def process_pdf(
         result = pdf_to_md_docling(file_path, job_name)
 
         if include_images or include_tables:  # images or tables are requested
-            flag, zip_buffer, messages = create_zip_archive(result, include_markdown, include_images,
-                                                            include_tables)
+            flag, zip_buffer, messages = create_zip_archive(
+                result, include_markdown, include_images, include_tables
+            )
             if flag:
                 return StreamingResponse(
                     zip_buffer,
@@ -192,13 +208,10 @@ async def process_pdf(
 
 
 @app.post("/standardizedoclingpdf/", status_code=status.HTTP_200_OK)
-async def standardizedoclingpdf(
-    file: UploadFile, 
-    background_tasks: BackgroundTasks
-):
+async def standardizedoclingpdf(file: UploadFile, background_tasks: BackgroundTasks):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="File must be a PDF")
-    
+
     background_tasks.add_task(my_background_task)
     contents = await file.read()
     output = Path("./temp_processing/output/pdf")
@@ -220,11 +233,9 @@ async def standardizedoclingpdf(
         filename=f"{file.filename}.md",
     )
 
+
 @app.post("/standardizedoclingurl/", status_code=status.HTTP_200_OK)
-async def standardizedoclingurl(
-    request: URLRequest,
-    background_tasks: BackgroundTasks
-):
+async def standardizedoclingurl(request: URLRequest, background_tasks: BackgroundTasks):
     try:
         url = request.url
         job_name = get_job_name()
@@ -240,7 +251,7 @@ async def standardizedoclingurl(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
     return FileResponse(
         standardized_output,
         media_type="application/octet-stream",
@@ -249,13 +260,10 @@ async def standardizedoclingurl(
 
 
 @app.post("/standardizemarkitdownpdf/", status_code=status.HTTP_200_OK)
-async def standardizemarkitdownpdf(
-    file: UploadFile, 
-    background_tasks: BackgroundTasks
-):
+async def standardizemarkitdownpdf(file: UploadFile, background_tasks: BackgroundTasks):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="File must be a PDF")
-    
+
     background_tasks.add_task(my_background_task)
     contents = await file.read()
     output = Path("./temp_processing/output/pdf")
@@ -277,10 +285,10 @@ async def standardizemarkitdownpdf(
         filename=f"{file.filename}.md",
     )
 
+
 @app.post("/standardizemarkitdownurl/", status_code=status.HTTP_200_OK)
 async def standardizemarkitdownurl(
-    request: URLRequest,
-    background_tasks: BackgroundTasks
+    request: URLRequest, background_tasks: BackgroundTasks
 ):
     try:
         url = request.url
@@ -297,7 +305,7 @@ async def standardizemarkitdownurl(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
     return FileResponse(
         standardized_output,
         media_type="application/octet-stream",
@@ -305,20 +313,20 @@ async def standardizemarkitdownurl(
     )
 
 
-@app.post('/processpdfenterprise/', status_code=status.HTTP_200_OK)
+@app.post("/processpdfenterprise/", status_code=status.HTTP_200_OK)
 async def process_pdf_enterprise(
-        background_tasks: BackgroundTasks,
-        file: UploadFile,
-        include_markdown: bool = Query(False),
-        include_images: bool = Query(False),
-        include_tables: bool = Query(False),
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    include_markdown: bool = Query(False),
+    include_images: bool = Query(False),
+    include_tables: bool = Query(False),
 ):
     if not any([include_markdown, include_images, include_tables]):
         raise HTTPException(
             status_code=400, detail="At least one output type must be selected"
         )
 
-    if file.content_type != 'application/pdf':
+    if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="File must be a PDF")
     try:
         background_tasks.add_task(my_background_task)
@@ -327,16 +335,17 @@ async def process_pdf_enterprise(
         os.makedirs(output, exist_ok=True)
         job_name = get_job_name()
 
-        file_path = output / f'{job_name}.pdf'
-        with open(file_path, 'wb') as f:
+        file_path = output / f"{job_name}.pdf"
+        with open(file_path, "wb") as f:
             f.write(contents)
             await file.close()
 
         result = pdf_to_md_enterprise(file_path, job_name)
 
         if include_images or include_tables:  # images or tables are requested
-            flag, zip_buffer, messages = create_zip_archive(result, include_markdown, include_images,
-                                                            include_tables)
+            flag, zip_buffer, messages = create_zip_archive(
+                result, include_markdown, include_images, include_tables
+            )
             if flag:
                 return StreamingResponse(
                     zip_buffer,
@@ -348,15 +357,15 @@ async def process_pdf_enterprise(
             else:
                 raise HTTPException(status_code=500, detail=messages)
         else:
-            if not result['markdown'] or not os.path.exists(result['markdown']):
+            if not result["markdown"] or not os.path.exists(result["markdown"]):
                 raise HTTPException(
                     status_code=500,
                     detail="Markdown couldn't be generated. Maybe webpage has no data.",
                 )
             return FileResponse(
-                result['markdown'],
-                media_type='application/octet-stream',
-                filename=f'{job_name}.md',
+                result["markdown"],
+                media_type="application/octet-stream",
+                filename=f"{job_name}.md",
             )
 
     except Exception as e:
@@ -367,11 +376,11 @@ async def process_pdf_enterprise(
 
 @app.post("/processurlenterprise/", status_code=status.HTTP_200_OK)
 async def process_url_enterprise(
-        background_tasks: BackgroundTasks,
-        request: URLRequest,
-        include_markdown: bool = Query(False),
-        include_images: bool = Query(False),
-        include_tables: bool = Query(False),
+    background_tasks: BackgroundTasks,
+    request: URLRequest,
+    include_markdown: bool = Query(False),
+    include_images: bool = Query(False),
+    include_tables: bool = Query(False),
 ):
     if not any([include_markdown, include_images, include_tables]):
         raise HTTPException(
@@ -384,14 +393,17 @@ async def process_url_enterprise(
         background_tasks.add_task(my_background_task)
 
         if include_images or include_tables:  # images or tables are requested
-            flag, zip_buffer, messages = create_zip_archive(result, include_markdown, include_images, include_tables)
+            flag, zip_buffer, messages = create_zip_archive(
+                result, include_markdown, include_images, include_tables
+            )
             if flag:
                 return StreamingResponse(
                     zip_buffer,
                     media_type="application/zip",
                     headers={
                         "Content-Disposition": f"attachment; filename={job_name}.zip"
-                    })
+                    },
+                )
             else:
                 raise HTTPException(status_code=500, detail=messages)
         else:
@@ -403,70 +415,70 @@ async def process_url_enterprise(
             return FileResponse(
                 result["markdown"],
                 media_type="application/octet-stream",
-                headers={
-                    "Content-Disposition": f"attachment; filename={job_name}.md"
-                },
+                headers={"Content-Disposition": f"attachment; filename={job_name}.md"},
                 filename=f"{job_name}.md",
             )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-   
 
 @app.post("/select_pdfcontent", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
 async def select_pdf_content(request: PDFSelection):
     try:
         if not validate_pdf_id(request.pdf_id):
             raise HTTPException(status_code=404, detail="Invalid PDF ID")
-        
+
         # Validate PDF ID first
         if not validate_pdf_id(request.pdf_id):
             logger.error(f"Invalid PDF ID: {request.pdf_id}")
             raise HTTPException(status_code=400, detail="Invalid PDF ID")
-    
+
         content = get_pdf_content(request.pdf_id)
         return {
-                "pdf_id": request.pdf_id,
-                "content": content[:5000],  # Return first 5k chars for preview
-                "metadata": {"pages": len(content.split('\n\f'))}
+            "pdf_id": request.pdf_id,
+            "content": content[:5000],  # Return first 5k chars for preview
+            "metadata": {"pages": len(content.split("\n\f"))},
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/upload_pdf", status_code=status.HTTP_201_CREATED, tags=["Assignment 4"])
-async def upload_pdf(file: UploadFile):
+async def upload_pdf(file: UploadFile, parser: Literal["docling", "mistral"]):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Invalid file type")
 
     try:
         contents = await file.read()
-        pdf_id = store_uploaded_pdf(contents)
+        pdf_id = store_uploaded_pdf(contents, parser)
         contents = get_pdf_content(pdf_id)
-        
+
         # Store PDF content in Redis stream for LLM processing
         try:
             # Store raw PDF content
             await store_pdf_content(pdf_id, contents)
-            
+
             # Send text content to stream for processing
-            await send_to_redis_stream('pdf_content', {
-                'pdf_id': pdf_id,
-                'content': contents,
-            })
+            await send_to_redis_stream(
+                "pdf_content",
+                {
+                    "pdf_id": pdf_id,
+                    "content": contents,
+                },
+            )
             logger.info(f"PDF {pdf_id} content stored and sent to stream")
         except Exception as e:
             logger.error(f"Failed to store PDF in Redis: {str(e)}")
             raise
         return PDFUploadResponse(
-            pdf_id=pdf_id,
-            status="success",
-            message=f"PDF stored with ID: {pdf_id}"
+            pdf_id=pdf_id, status="success", message=f"PDF stored with ID: {pdf_id}"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         await file.close()
+
 
 @app.post("/summarize/", response_model=dict, tags=["Assignment 4"])
 async def generate_summary(request: SummaryRequest):
@@ -478,53 +490,80 @@ async def generate_summary(request: SummaryRequest):
             logger.error(f"Invalid PDF ID: {request.pdf_id}")
             raise HTTPException(status_code=400, detail="Invalid PDF ID")
 
+        llm_manager = LLMManager()
+        content = get_pdf_content(request.pdf_id)
+        logger.info(f"Retrieved {len(content)} characters for PDF {request.pdf_id}")
+
         # Send request to Redis stream and wait for response
         try:
-            await send_to_redis_stream('llm_requests', {
-                'type': 'summary',
-                'pdf_id': request.pdf_id,
-                'max_tokens': request.max_tokens
-            })
-            
+            await send_to_redis_stream(
+                "llm_requests",
+                {
+                    "type": "summary",
+                    "pdf_id": request.pdf_id,
+                    "max_tokens": request.max_tokens,
+                },
+            )
+
             response = await receive_llm_response()
             if not response:
                 raise HTTPException(status_code=408, detail="LLM response timeout")
-            
+
             return {
-                "summary": response.get('content', ''), 
-                "tokens_used": len(response.get('content', '').split())
+                "summary": response.get("content", ""),
+                "tokens_used": len(response.get("content", "").split()),
             }
         except Exception as e:
             logger.error(f"LLM processing failed: {str(e)}")
             raise HTTPException(status_code=500, detail="Summary generation failed")
-            
+
     except FileNotFoundError as e:
         logger.error(f"PDF content lookup failed: {str(e)}")
         raise HTTPException(status_code=404, detail="PDF content not found")
+
 
 @app.post("/ask_question", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
 async def answer_pdf_question(request: QuestionRequest):
     logger = logging.getLogger(__name__)
     try:
-        await send_to_redis_stream('llm_requests', {
-            'type': 'question',
-            'pdf_id': request.pdf_id,
-            'question': request.question,
-            'max_tokens': request.max_tokens
-        })
-            
+        # Validate PDF ID first
+        if not validate_pdf_id(request.pdf_id):
+            logger.error(f"Invalid PDF ID: {request.pdf_id}")
+            raise HTTPException(status_code=400, detail="Invalid PDF ID")
+
+        llm_manager = LLMManager()
+        content = get_pdf_content(request.pdf_id)
+        logger.info(f"Retrieved {len(content)} characters for PDF {request.pdf_id}")
+    except FileNotFoundError as e:
+        logger.error(f"PDF content lookup failed: {str(e)}")
+        raise HTTPException(status_code=404, detail="PDF content not found")
+
+    try:
+
+        await send_to_redis_stream(
+            "llm_requests",
+            {
+                "type": "question",
+                "pdf_id": request.pdf_id,
+                "question": request.question,
+                "max_tokens": request.max_tokens,
+            },
+        )
+
         response = await receive_llm_response()
         if not response:
             raise HTTPException(status_code=408, detail="LLM response timeout")
-            
+
         # Extract content from response
-        content = response.get('content')
+        content = response.get("content")
         if not content:
             logger.error(f"Missing content in response: {response}")
-            raise HTTPException(status_code=500, detail="Invalid response format from LLM service")
-        
+            raise HTTPException(
+                status_code=500, detail="Invalid response format from LLM service"
+            )
+
         # Check response status
-        if response.get('status') != 'success':
+        if response.get("status") != "success":
             logger.error(f"Failed response status: {response}")
             raise HTTPException(status_code=500, detail="LLM service processing failed")
 
@@ -532,11 +571,12 @@ async def answer_pdf_question(request: QuestionRequest):
             "question": request.question,
             "answer": content,
             "source_pdf": request.pdf_id,
-            "status": "success"
+            "status": "success",
         }
     except Exception as e:
         logger.error(f"LLM processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Question answering failed")
+
 
 def create_zip_archive(result, include_markdown, include_images, include_tables):
     flag = False
@@ -550,9 +590,7 @@ def create_zip_archive(result, include_markdown, include_images, include_tables)
                     "Markdown couldn't be generated. Maybe webpage has blockers."
                 )
             else:
-                zip_file.write(
-                    result["markdown"], arcname="document.md"
-                )
+                zip_file.write(result["markdown"], arcname="document.md")
                 flag = flag or True
 
         # Images

@@ -2,4 +2,5 @@
 backend/temp_processing/
 backend/__pycache__/
 temp_processing/
+.backend/
 .env
