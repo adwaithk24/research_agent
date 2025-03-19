@@ -30,7 +30,7 @@ s3_html_input_prefix = "html/raw"
 
 
 def store_uploaded_pdf(
-    pdf_content: bytes, parser: Literal["docling", "mistral"] = "docling"
+    pdf_content: bytes, parser: Literal["docling", "mistral"]
 ) -> str:
     """Store uploaded PDF and convert to markdown for LLM processing"""
     logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ def store_uploaded_pdf(
         case "docling":
             # Convert to markdown using existing pipeline
             markdown_output = pdf_to_md_docling(pdf_path, pdf_id)
+
         case "mistral":
             # Convert to markdown using existing pipeline
             markdown_output = pdf_to_md_mistral(pdf_path, pdf_id)

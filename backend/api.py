@@ -414,9 +414,7 @@ async def select_pdf_content(request: PDFSelection):
 
 
 @app.post("/upload_pdf", status_code=status.HTTP_201_CREATED)
-async def upload_pdf(
-    file: UploadFile, parser: Literal["docling", "mistral"] = "docling"
-):
+async def upload_pdf(file: UploadFile, parser: Literal["docling", "mistral"]):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Invalid file type")
 

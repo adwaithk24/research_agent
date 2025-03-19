@@ -43,11 +43,12 @@ if "new_chat_name" not in st.session_state:
 #     st.rerun()
 
 
-def upload_pdf_to_backend(file, chat_id):
+def upload_pdf_to_backend(file, chat_id, ocr_method: str):
     try:
         response = requests.post(
             "http://localhost:8000/upload_pdf",
             files={"file": (file.name, file, "application/pdf")},
+            params={"parser": ocr_method},
         )
         if response.status_code == 201:
             response_data = response.json()
@@ -286,13 +287,19 @@ with middle_col:
             # Show PDF upload prompt if no PDF is uploaded yet
             if not chat.get("has_pdf", False):
                 with st.status("Upload a PDF document", expanded=True) as upload_status:
+                    ocr_method = st.selectbox(
+                        "Select OCR method",
+                        options=["mistral", "docling"],
+                        index=1,
+                    )
+
                     uploaded_file = st.file_uploader(
                         "Upload a PDF document",
                         type=["pdf"],
                         key=f"{chat}.has_pdf",
                     )
                     if uploaded_file is not None:
-                        if upload_pdf_to_backend(uploaded_file, chat_id):
+                        if upload_pdf_to_backend(uploaded_file, chat_id, ocr_method):
                             st.session_state.messages[chat_id].append(
                                 {
                                     "role": "system",
