@@ -18,7 +18,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
 
 from llm_manager import LLMManager
 from pipelines import (
@@ -414,13 +414,15 @@ async def select_pdf_content(request: PDFSelection):
 
 
 @app.post("/upload_pdf", status_code=status.HTTP_201_CREATED)
-async def upload_pdf(file: UploadFile):
+async def upload_pdf(
+    file: UploadFile, parser: Literal["docling", "mistral"] = "docling"
+):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Invalid file type")
 
     try:
         contents = await file.read()
-        pdf_id = store_uploaded_pdf(contents)
+        pdf_id = store_uploaded_pdf(contents, parser)
         return PDFUploadResponse(
             pdf_id=pdf_id, status="success", message=f"PDF stored with ID: {pdf_id}"
         )

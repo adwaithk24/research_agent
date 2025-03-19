@@ -5,6 +5,7 @@ from pathlib import Path
 import fitz
 import pandas as pd
 from docling.document_converter import DocumentConverter
+from mistralai import DocumentURLChunk, FilePurpose, Mistral
 
 from cloud_ops import (
     download_file_from_s3,
@@ -34,6 +35,39 @@ def extract_text_with_docling(pdf_file, markdown_file):
 
     with open(markdown_file, "w", encoding="utf-8") as f:
         f.write(markdown_content)
+
+    print(f'Text extracted and saved to "{markdown_file}".')
+
+
+def extract_text_with_mistral(pdf_file: Path, markdown_file: Path):
+    client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
+    with open(pdf_file, "rb") as f:
+        uploaded_pdf = client.files.upload(
+            file={
+                "file_name": pdf_file.name,
+                "content": f,
+            },
+            purpose="ocr",
+        )
+
+        signed_url = client.files.get_signed_url(file_id=uploaded_pdf.id)
+        ocr_result = client.ocr.process(
+            model="mistral-ocr-latest",
+            document={
+                "type": "document_url",
+                "document_url": signed_url.url,
+            },
+            include_image_base64=True,
+        )
+    with open(markdown_file, "w", encoding="utf-8") as f:
+        f.write(
+            "".join(
+                [
+                    f"### Page {i+1}\n{ocr_result.pages[i].markdown}"
+                    for i in range(len(ocr_result.pages))
+                ]
+            )
+        )
 
     print(f'Text extracted and saved to "{markdown_file}".')
 
