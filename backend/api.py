@@ -1,7 +1,9 @@
 import os
+import asyncio
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, HTTPException, status, BackgroundTasks, Query
@@ -13,6 +15,12 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 from .llm_manager import LLMManager  
+from .redis_manager import (
+    send_to_redis_stream, 
+    store_pdf_content,
+    get_pdf_content,
+    receive_llm_response
+)
 from .pipelines import (
     store_uploaded_pdf,
     get_pdf_content,
@@ -30,6 +38,26 @@ from .pipelines import (
 load_dotenv()
 app = FastAPI()
 
+# LLM Service instance
+llm_service = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    global llm_service
+    from .llm_service import LLMService
+    
+    llm_service = LLMService()
+    asyncio.create_task(llm_service.start())
+    logger.info("LLM Service started")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down LLM Service")
+
+app = FastAPI(lifespan=lifespan)
+
 
 class URLRequest(BaseModel):
     url: str
@@ -45,7 +73,8 @@ class PDFUploadResponse(BaseModel):
 class SummaryRequest(BaseModel):
     pdf_id: str = Field(..., min_length=8, max_length=100)
     summary_length: int = Field(200, gt=50, lt=1000)
-
+    max_tokens: int = Field(500, gt=100, lt=2000)
+    
 class QuestionRequest(BaseModel):
     pdf_id: str
     question: str = Field(..., min_length=10)
@@ -385,7 +414,7 @@ async def process_url_enterprise(
 
    
 
-@app.post("/select_pdfcontent", status_code=status.HTTP_200_OK)
+@app.post("/select_pdfcontent", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
 async def select_pdf_content(request: PDFSelection):
     try:
         if not validate_pdf_id(request.pdf_id):
@@ -405,7 +434,7 @@ async def select_pdf_content(request: PDFSelection):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/upload_pdf", status_code=status.HTTP_201_CREATED)
+@app.post("/upload_pdf", status_code=status.HTTP_201_CREATED, tags=["Assignment 4"])
 async def upload_pdf(file: UploadFile):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Invalid file type")
@@ -413,6 +442,22 @@ async def upload_pdf(file: UploadFile):
     try:
         contents = await file.read()
         pdf_id = store_uploaded_pdf(contents)
+        contents = get_pdf_content(pdf_id)
+        
+        # Store PDF content in Redis stream for LLM processing
+        try:
+            # Store raw PDF content
+            await store_pdf_content(pdf_id, contents)
+            
+            # Send text content to stream for processing
+            await send_to_redis_stream('pdf_content', {
+                'pdf_id': pdf_id,
+                'content': contents,
+            })
+            logger.info(f"PDF {pdf_id} content stored and sent to stream")
+        except Exception as e:
+            logger.error(f"Failed to store PDF in Redis: {str(e)}")
+            raise
         return PDFUploadResponse(
             pdf_id=pdf_id,
             status="success",
@@ -423,7 +468,7 @@ async def upload_pdf(file: UploadFile):
     finally:
         await file.close()
 
-@app.post("/summarize/", response_model=dict)
+@app.post("/summarize/", response_model=dict, tags=["Assignment 4"])
 async def generate_summary(request: SummaryRequest):
     logger = logging.getLogger(__name__)
 
@@ -432,53 +477,66 @@ async def generate_summary(request: SummaryRequest):
         if not validate_pdf_id(request.pdf_id):
             logger.error(f"Invalid PDF ID: {request.pdf_id}")
             raise HTTPException(status_code=400, detail="Invalid PDF ID")
-    
-        llm_manager = LLMManager()
-        content = get_pdf_content(request.pdf_id)
-        logger.info(f"Retrieved {len(content)} characters for PDF {request.pdf_id}")
+
+        # Send request to Redis stream and wait for response
+        try:
+            await send_to_redis_stream('llm_requests', {
+                'type': 'summary',
+                'pdf_id': request.pdf_id,
+                'max_tokens': request.max_tokens
+            })
+            
+            response = await receive_llm_response()
+            if not response:
+                raise HTTPException(status_code=408, detail="LLM response timeout")
+            
+            return {
+                "summary": response.get('content', ''), 
+                "tokens_used": len(response.get('content', '').split())
+            }
+        except Exception as e:
+            logger.error(f"LLM processing failed: {str(e)}")
+            raise HTTPException(status_code=500, detail="Summary generation failed")
+            
     except FileNotFoundError as e:
         logger.error(f"PDF content lookup failed: {str(e)}")
         raise HTTPException(status_code=404, detail="PDF content not found")
-        
-    try:
-        summary = await llm_manager.get_summary(
-            text=content,
-            max_tokens=request.summary_length
-        )
-        return {"summary": summary, "tokens_used": len(summary.split())}
-    except Exception as e:
-        logger.error(f"LLM processing failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Summary generation failed")
 
-@app.post("/ask_question", status_code=status.HTTP_200_OK)
+@app.post("/ask_question", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
 async def answer_pdf_question(request: QuestionRequest):
     logger = logging.getLogger(__name__)
     try:
-        # Validate PDF ID first
-        if not validate_pdf_id(request.pdf_id):
-            logger.error(f"Invalid PDF ID: {request.pdf_id}")
-            raise HTTPException(status_code=400, detail="Invalid PDF ID")
+        await send_to_redis_stream('llm_requests', {
+            'type': 'question',
+            'pdf_id': request.pdf_id,
+            'question': request.question,
+            'max_tokens': request.max_tokens
+        })
+            
+        response = await receive_llm_response()
+        if not response:
+            raise HTTPException(status_code=408, detail="LLM response timeout")
+            
+        # Extract content from response
+        content = response.get('content')
+        if not content:
+            logger.error(f"Missing content in response: {response}")
+            raise HTTPException(status_code=500, detail="Invalid response format from LLM service")
+        
+        # Check response status
+        if response.get('status') != 'success':
+            logger.error(f"Failed response status: {response}")
+            raise HTTPException(status_code=500, detail="LLM service processing failed")
 
-        llm_manager = LLMManager()
-        content = get_pdf_content(request.pdf_id)
-        logger.info(f"Retrieved {len(content)} characters for PDF {request.pdf_id}")
-    except FileNotFoundError as e:
-        logger.error(f"PDF content lookup failed: {str(e)}")
-        raise HTTPException(status_code=404, detail="PDF content not found")
-    
-    try:
-        answer = await llm_manager.ask_question(
-            context=content,
-            question=request.question,
-            max_tokens=request.max_tokens
-        )
         return {
             "question": request.question,
-            "answer": answer,
-            "source_pdf": request.pdf_id
+            "answer": content,
+            "source_pdf": request.pdf_id,
+            "status": "success"
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"LLM processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Question answering failed")
 
 def create_zip_archive(result, include_markdown, include_images, include_tables):
     flag = False

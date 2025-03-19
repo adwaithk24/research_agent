@@ -10,9 +10,6 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# LiteLLM configuration
-litellm.set_verbose = True
-
 class LLMManager:
     def __init__(self):
         self.model_config = {
@@ -31,6 +28,7 @@ class LLMManager:
         Get LLM response with usage tracking and error handling
         """
         try:
+            logger.info(f"LLMManager: Sending request to {model_name}...")
             response = await acompletion(
                 model=model_name,
                 messages=[{"role": "user", "content": prompt}],
@@ -75,6 +73,7 @@ class LLMManager:
             logger.warning(f"No pricing data for model: {model_name}")
             return 0.0
 
+        logger.info(f"Calculating cost for model: {model_name}")
         cost = (input_tokens * pricing[model_name]["input"] / 1000) + \
                (output_tokens * pricing[model_name]["output"] / 1000)
         return cost
@@ -89,6 +88,7 @@ class LLMManager:
         ).format(max_tokens=max_tokens, content=text[:15000])  # Truncate to 15k chars
 
         try:
+            logger.info("LLMManager: Generating summary...")
             response = await self.get_llm_response(prompt, model_name="gpt-3.5-turbo")
             return response.strip()
         except Exception as e:
@@ -104,8 +104,9 @@ class LLMManager:
         "- Maximum {max_tokens} tokens"
         "- If unsure, state \"I cannot determine from the provided content"
         ).format(context=context, question=question, max_tokens=max_tokens)
-
+        
         try:
+            logger.info("LLMManager: Asking question...")
             response = await self.get_llm_response(prompt, model_name="gpt-3.5-turbo")
             return response.strip()
         except Exception as e:

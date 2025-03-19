@@ -25,7 +25,6 @@ s3_html_input_prefix = 'html/raw'
 def store_uploaded_pdf(pdf_content: bytes) -> str:
     """Store uploaded PDF and convert to markdown for LLM processing"""
     logger = logging.getLogger(__name__)
-    """Store uploaded PDF and convert to markdown for LLM processing"""
     pdf_id = str(uuid.uuid4())
     os.makedirs(output, exist_ok=True)
     
