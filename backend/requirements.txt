@@ -21,4 +21,4 @@ mistralai==1.5.1
 chunking_evaluation @ git+https://github.com/brandonstarxel/chunking_evaluation@d451fc4
 chromadb==0.6.3
 numpy
-git+https://github.com/brandonstarxel/chunking_evaluation.git
+pinecone
