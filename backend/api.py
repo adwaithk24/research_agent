@@ -9,6 +9,7 @@ from fastapi import FastAPI, UploadFile, HTTPException, status, BackgroundTasks,
 from fastapi.responses import FileResponse, StreamingResponse
 import logging
 
+from llm_manager import LLMManager
 from rag_pipeline import RAGPipeline
 
 logger = logging.getLogger(__name__)
@@ -490,13 +491,18 @@ async def generate_summary(request: SummaryRequest):
 
         # Send request to Redis stream and wait for response
         try:
+            content = get_pdf_content(request.pdf_id)
+            logger.info(
+                f"Sending PDF content to Redis stream for {request.pdf_id} content: {content}"
+            )
             await send_to_redis_stream(
                 "pdf_content",
                 {
                     "pdf_id": request.pdf_id,
-                    "content": get_pdf_content(request.pdf_id),
+                    "content": content,
                 },
             )
+            logger.info(f"PDF content sent to Redis stream for {request.pdf_id}")
             await send_to_redis_stream(
                 "llm_requests",
                 {
@@ -506,8 +512,11 @@ async def generate_summary(request: SummaryRequest):
                     "model": request.model,
                 },
             )
-
+            logger.info(f"Summary request sent to Redis stream for {request.pdf_id}")
             response = await receive_llm_response()
+            logger.info(
+                f"Summary response received from Redis stream for {request.pdf_id}"
+            )
             if not response:
                 raise HTTPException(status_code=408, detail="LLM response timeout")
 
@@ -546,43 +555,72 @@ async def answer_pdf_question(request: QuestionRequest):
         logger.info(f"PDF {request.pdf_id} retrieved {len(relevant_chunks)} chunks")
         context = "\n\n".join(relevant_chunks)
         logger.info(f"PDF {request.pdf_id} context: {context}")
-        await send_to_redis_stream(
-            "pdf_content",
-            {
-                "pdf_id": request.pdf_id,
-                "content": context,
-            },
+        # await send_to_redis_stream(
+        #     "pdf_content",
+        #     {
+        #         "pdf_id": request.pdf_id,
+        #         "content": context,
+        #     },
+        # )
+        # logger.info(f"PDF {request.pdf_id} context sent to stream")
+        # await send_to_redis_stream(
+        #     "llm_requests",
+        #     {
+        #         "type": "question",
+        #         "pdf_id": request.pdf_id,
+        #         "question": request.question,
+        #         "max_tokens": request.max_tokens,
+        #     },
+        # )
+        # logger.info(f"Question {request.question} sent to stream")
+        # response = await receive_llm_response()
+        system_message = """You are a helpful assistant that provides accurate information based on the given context. 
+                            If the context doesn't contain relevant information to answer the question, acknowledge that and provide general information if possible.
+                            Always cite your sources by referring to the source numbers provided in brackets. Do not make up information."""
+
+        # Define the user message with query and context
+        user_message = f"""Question: {request.question}
+        
+        Context information:
+        {context}
+        
+        Please answer the question based on the context information provided."""
+        # prompt = (
+        #     "Context:\n{context}\n\nQuestion: {question}\n\n"
+        #     "Requirements:"
+        #     "- Answer must be factual based on context"
+        #     "- Maximum {max_tokens} tokens"
+        #     '- If unsure, state "I cannot determine from the provided content'
+        # ).format(
+        #     context=context, question=request.question, max_tokens=request.max_tokens
+        # )
+        prompt = {
+            "system_message": system_message,
+            "user_message": user_message,
+        }
+
+        llm_manager = LLMManager()
+        content, usage_metrics = await llm_manager.get_llm_response(
+            prompt, request.model
         )
-        logger.info(f"PDF {request.pdf_id} context sent to stream")
-        await send_to_redis_stream(
-            "llm_requests",
-            {
-                "type": "question",
-                "pdf_id": request.pdf_id,
-                "question": request.question,
-                "max_tokens": request.max_tokens,
-            },
-        )
-        logger.info(f"Question {request.question} sent to stream")
-        response = await receive_llm_response()
-        if not response:
-            raise HTTPException(status_code=408, detail="LLM response timeout")
+        # if not response:
+        #     raise HTTPException(status_code=408, detail="LLM response timeout")
 
         # Extract content from response
-        content = response.get("content")
-        if not content:
-            logger.error(f"Missing content in response: {response}")
-            raise HTTPException(
-                status_code=500, detail="Invalid response format from LLM service"
-            )
+        # content = response.get("content")
+        # if not content:
+        #     logger.error(f"Missing content in response: {response}")
+        #     raise HTTPException(
+        #         status_code=500, detail="Invalid response format from LLM service"
+        #     )
 
         # Check response status
-        if response.get("status") != "success":
-            logger.error(f"Failed response status: {response}")
-            raise HTTPException(status_code=500, detail="LLM service processing failed")
+        # if response.get("status") != "success":
+        #     logger.error(f"Failed response status: {response}")
+        #     raise HTTPException(status_code=500, detail="LLM service processing failed")
 
         # Extract usage metrics from response
-        usage_metrics = response.get("usage", {})
+        # usage_metrics = response.get("usage", {})
         if not usage_metrics:
             logger.warning("No usage metrics found in response")
 
