@@ -8,7 +8,7 @@ def read_markdown_file(file_path):
     with open(file_path, "r", encoding="utf-8") as file:
         return file.read()
 
-def chunk_document(text, chunk_size=400, chunk_overlap=50):
+def recursive_chunk_document(text, chunk_size=384, chunk_overlap=50):
     chunker = RecursiveTokenChunker(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -17,6 +17,33 @@ def chunk_document(text, chunk_size=400, chunk_overlap=50):
     )
     return chunker.split_text(text)
 
+
+def character_chunk_text(text, chunk_size=384, overlap=50):
+    """
+    Split text into chunks based on character count.
+    
+    Args:
+        text: Text to split
+        chunk_size: Maximum number of characters per chunk
+        overlap: Number of overlapping characters between chunks
+    
+    Returns:
+        List of text chunks
+    """
+    chunks = []
+    stride = chunk_size - overlap
+    current_idx = 0
+    
+    while current_idx < len(text):
+        # Take chunk_size characters starting from current_idx
+        chunk = text[current_idx:current_idx + chunk_size]
+        if not chunk:  # Break if we're out of text
+            break
+        chunks.append(chunk)
+        current_idx += stride  # Move forward by stride
+    
+    return chunks
+
 def embed_texts(texts, model_name="all-MiniLM-L6-v2"):
     embedding_model = SentenceTransformer(model_name)
     return embedding_model.encode(texts)
@@ -24,7 +51,7 @@ def embed_texts(texts, model_name="all-MiniLM-L6-v2"):
 # Load and process file
 file_path = "nvidia_2024.md"
 content = read_markdown_file(file_path)
-chunks = chunk_document(content)
+chunks = recursive_chunk_document(content)  #character_chunk_text(content) --Change this for the type of chunking
 
 # Create embeddings
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
