@@ -92,7 +92,6 @@ class QuestionRequest(BaseModel):
 
 active_rag_pipelines = {}
 
-
 @app.post("/processurl/", status_code=status.HTTP_200_OK)
 async def process_url(
     background_tasks: BackgroundTasks,
@@ -603,7 +602,34 @@ async def answer_pdf_question(request: QuestionRequest):
         logger.error(f"LLM processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Question answering failed")
 
-
+@app.post("/ask_nvidia", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
+async def ask_nvidia(request: QuestionRequest, year: Optional[str] = None, quarter: Optional[str] = None):
+    try:
+        pipeline = RAGPipeline(
+            pdf_id="0000",
+            text="",
+            vector_store="nvidia",
+            chunking_strategy="recursive",
+            year=year,
+            quarter=quarter
+        )
+        pipeline.process()
+        
+        relevant_chunks = pipeline.get_relevant_chunks(
+            query=request.question,
+            k=5
+        )
+        
+        response = answer_question_rag(
+            query=request.question,
+            model_name=request.model,
+            text='\n'.join(relevant_chunks)
+        )
+        return response
+    except Exception as e:
+        logger.error(f"Error in NVIDIA RAG query: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
 def create_zip_archive(result, include_markdown, include_images, include_tables):
     flag = False
     messages = []
