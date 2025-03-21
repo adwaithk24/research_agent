@@ -11,16 +11,16 @@ import requests
 from docling.document_converter import DocumentConverter
 from markitdown import MarkItDown
 
-from .cloud_ops import upload_file_to_s3, upload_directory_to_s3
-from .firecrawl_code import firecrawl
-from .llamaparser_pdf import llama_parse_pdf
-from .python_pdf_extraction import (
+from cloud_ops import upload_file_to_s3, upload_directory_to_s3
+from firecrawl_code import firecrawl
+from llamaparser_pdf import llama_parse_pdf
+from python_pdf_extraction import (
     extract_text_with_docling,
     extract_images_to_folder,
     extract_tables_with_docling,
     extract_text_with_mistral,
 )
-from .webscraper import WebScraper
+from webscraper import WebScraper
 
 base_dir = Path("./temp_processing")
 output = base_dir / Path("output")
@@ -69,6 +69,7 @@ def get_pdf_content(pdf_id: str) -> str:
 
     with open(markdown_path, "r") as f:
         return f.read()
+
 
 def html_to_md_docling(url: str, job_name: uuid):
     s3_prefix_text = "html/html-parser/extracted-text"
