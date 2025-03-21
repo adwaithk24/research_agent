@@ -109,7 +109,7 @@ async def receive_from_redis_stream(
         raise
 
 
-async def get_pdf_content(pdf_id: str) -> Optional[bytes]:
+async def get_pdf_content_from_redis(pdf_id: str) -> Optional[bytes]:
     """Get PDF content from Redis.
 
     Args:

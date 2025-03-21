@@ -15,9 +15,9 @@ logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
 from typing import Literal, Optional
 
-from redis_manager import (
-    send_to_redis_stream,
-    receive_llm_response,
+from .redis_manager import (
+    send_to_redis_stream, 
+    receive_llm_response
 )
 from pipelines import (
     store_uploaded_pdf,
