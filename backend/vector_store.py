@@ -89,12 +89,12 @@ def retrieve_relevant_chunks(
     distances = results["distances"][0]
 
     # Print retrieval information for debugging
-    print(f"Retrieved {len(chunks)} chunks for query: '{query}'")
-    for i, (chunk, distance) in enumerate(zip(chunks, distances)):
-        print("-" * 40)
-        print(f"\nChunk {i+1} (Distance: {distance:.4f}):")
-        preview = chunk
-        print(preview)
+    # print(f"Retrieved {len(chunks)} chunks for query: '{query}'")
+    # for i, (chunk, distance) in enumerate(zip(chunks, distances)):
+    #     print("-" * 40)
+    #     print(f"\nChunk {i+1} (Distance: {distance:.4f}):")
+    #     preview = chunk
+    #     print(preview)
 
     return chunks
 

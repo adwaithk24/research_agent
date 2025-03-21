@@ -9,13 +9,14 @@ from fastapi import FastAPI, UploadFile, HTTPException, status, BackgroundTasks,
 from fastapi.responses import FileResponse, StreamingResponse
 import logging
 
+from rag_pipeline import RAGPipeline
+
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
 
 from redis_manager import (
     send_to_redis_stream,
-    get_pdf_content,
     receive_llm_response,
 )
 from pipelines import (
@@ -87,6 +88,9 @@ class QuestionRequest(BaseModel):
     model: str = Field(
         "gemini/gemini-2.0-flash", description="LLM model to use for question answering"
     )
+
+
+active_rag_pipelines = {}
 
 
 @app.post("/processurl/", status_code=status.HTTP_200_OK)
@@ -432,7 +436,12 @@ async def select_pdf_content(request: PDFSelection):
 
 
 @app.post("/upload_pdf", status_code=status.HTTP_201_CREATED, tags=["Assignment 4"])
-async def upload_pdf(file: UploadFile, parser: Literal["docling", "mistral"]):
+async def upload_pdf(
+    file: UploadFile,
+    parser: Literal["docling", "mistral"],
+    chunking_strategy: Literal["recursive", "semantic", "fixed"],
+    vector_store: Literal["chroma", "pinecone", "naive"],
+):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Invalid file type")
 
@@ -440,24 +449,35 @@ async def upload_pdf(file: UploadFile, parser: Literal["docling", "mistral"]):
         contents = await file.read()
         pdf_id = store_uploaded_pdf(contents, parser)
         contents = get_pdf_content(pdf_id)
+        rag_pipeline = RAGPipeline(
+            pdf_id=pdf_id,
+            text=contents,
+            chunking_strategy=chunking_strategy,
+            vector_store=vector_store,
+        )
+        rag_pipeline.process()
+        logger.info(f"PDF {pdf_id} processed")
+        active_rag_pipelines[pdf_id] = rag_pipeline
 
         # Send text content to stream for processing
-        try:
-            await send_to_redis_stream(
-                "pdf_content",
-                {
-                    "pdf_id": pdf_id,
-                    "content": contents,
-                },
-            )
-            logger.info(f"PDF {pdf_id} content sent to stream")
-        except Exception as e:
-            logger.error(f"Failed to process PDF: {str(e)}")
-            raise
+        # try:
+
+        # await send_to_redis_stream(
+        #     "pdf_content",
+        #     {
+        #         "pdf_id": pdf_id,
+        #         "content": contents,
+        #     },
+        # )
+        #     logger.info(f"PDF {pdf_id} content sent to stream")
+        # except Exception as e:
+        #     logger.error(f"Failed to process PDF: {str(e)}")
+        #     raise
         return PDFUploadResponse(
             pdf_id=pdf_id, status="success", message=f"PDF stored with ID: {pdf_id}"
         )
     except Exception as e:
+        logger.error(f"Failed to process PDF: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         await file.close()
@@ -465,12 +485,19 @@ async def upload_pdf(file: UploadFile, parser: Literal["docling", "mistral"]):
 
 @app.post("/summarize/", response_model=dict, tags=["Assignment 4"])
 async def generate_summary(request: SummaryRequest):
-    logger = logging.getLogger(__name__)
+    # logger = logging.getLogger(__name__)
 
     try:
 
         # Send request to Redis stream and wait for response
         try:
+            await send_to_redis_stream(
+                "pdf_content",
+                {
+                    "pdf_id": request.pdf_id,
+                    "content": get_pdf_content(request.pdf_id),
+                },
+            )
             await send_to_redis_stream(
                 "llm_requests",
                 {
@@ -511,8 +538,23 @@ async def generate_summary(request: SummaryRequest):
 
 @app.post("/ask_question", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
 async def answer_pdf_question(request: QuestionRequest):
-    logger = logging.getLogger(__name__)
+    # logger = logging.getLogger(__name__)
+    if request.pdf_id not in active_rag_pipelines:
+        raise HTTPException(status_code=404, detail="PDF not found")
     try:
+        rag_pipeline: RAGPipeline = active_rag_pipelines[request.pdf_id]
+        relevant_chunks = rag_pipeline.get_relevant_chunks(request.question, 5)
+        logger.info(f"PDF {request.pdf_id} retrieved {len(relevant_chunks)} chunks")
+        context = "\n\n".join(relevant_chunks)
+        logger.info(f"PDF {request.pdf_id} context: {context}")
+        await send_to_redis_stream(
+            "pdf_content",
+            {
+                "pdf_id": request.pdf_id,
+                "content": context,
+            },
+        )
+        logger.info(f"PDF {request.pdf_id} context sent to stream")
         await send_to_redis_stream(
             "llm_requests",
             {
@@ -522,7 +564,7 @@ async def answer_pdf_question(request: QuestionRequest):
                 "max_tokens": request.max_tokens,
             },
         )
-
+        logger.info(f"Question {request.question} sent to stream")
         response = await receive_llm_response()
         if not response:
             raise HTTPException(status_code=408, detail="LLM response timeout")
