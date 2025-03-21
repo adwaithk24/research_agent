@@ -4,35 +4,23 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from contextlib import asynccontextmanager
-
 from dotenv import load_dotenv
-from fastapi import (
-    FastAPI,
-    UploadFile,
-    HTTPException,
-    status,
-    BackgroundTasks,
-    Query,
-    File,
-)
+from fastapi import FastAPI, UploadFile, HTTPException, status, BackgroundTasks, Query
 from fastapi.responses import FileResponse, StreamingResponse
 import logging
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
-from typing import Literal, Optional
+from typing import Optional
 
-from llm_manager import LLMManager
 from redis_manager import (
     send_to_redis_stream,
-    store_pdf_content,
     get_pdf_content,
     receive_llm_response,
 )
 from pipelines import (
     store_uploaded_pdf,
     get_pdf_content,
-    validate_pdf_id,
     standardize_docling,
     standardize_markitdown,
     html_to_md_docling,
@@ -87,12 +75,18 @@ class SummaryRequest(BaseModel):
     pdf_id: str = Field(..., min_length=8, max_length=100)
     summary_length: int = Field(200, gt=50, lt=1000)
     max_tokens: int = Field(500, gt=100, lt=2000)
+    model: str = Field(
+        "gemini/gemini-2.0-flash", description="LLM model to use for summary generation"
+    )
 
 
 class QuestionRequest(BaseModel):
     pdf_id: str
     question: str = Field(..., min_length=10)
     max_tokens: int = Field(500, gt=100, lt=2000)
+    model: str = Field(
+        "gemini/gemini-2.0-flash", description="LLM model to use for question answering"
+    )
 
 
 @app.post("/processurl/", status_code=status.HTTP_200_OK)
@@ -426,13 +420,6 @@ async def process_url_enterprise(
 @app.post("/select_pdfcontent", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
 async def select_pdf_content(request: PDFSelection):
     try:
-        if not validate_pdf_id(request.pdf_id):
-            raise HTTPException(status_code=404, detail="Invalid PDF ID")
-
-        # Validate PDF ID first
-        if not validate_pdf_id(request.pdf_id):
-            logger.error(f"Invalid PDF ID: {request.pdf_id}")
-            raise HTTPException(status_code=400, detail="Invalid PDF ID")
 
         content = get_pdf_content(request.pdf_id)
         return {
@@ -454,12 +441,8 @@ async def upload_pdf(file: UploadFile, parser: Literal["docling", "mistral"]):
         pdf_id = store_uploaded_pdf(contents, parser)
         contents = get_pdf_content(pdf_id)
 
-        # Store PDF content in Redis stream for LLM processing
+        # Send text content to stream for processing
         try:
-            # Store raw PDF content
-            await store_pdf_content(pdf_id, contents)
-
-            # Send text content to stream for processing
             await send_to_redis_stream(
                 "pdf_content",
                 {
@@ -467,9 +450,9 @@ async def upload_pdf(file: UploadFile, parser: Literal["docling", "mistral"]):
                     "content": contents,
                 },
             )
-            logger.info(f"PDF {pdf_id} content stored and sent to stream")
+            logger.info(f"PDF {pdf_id} content sent to stream")
         except Exception as e:
-            logger.error(f"Failed to store PDF in Redis: {str(e)}")
+            logger.error(f"Failed to process PDF: {str(e)}")
             raise
         return PDFUploadResponse(
             pdf_id=pdf_id, status="success", message=f"PDF stored with ID: {pdf_id}"
@@ -485,14 +468,6 @@ async def generate_summary(request: SummaryRequest):
     logger = logging.getLogger(__name__)
 
     try:
-        # Validate PDF ID first
-        if not validate_pdf_id(request.pdf_id):
-            logger.error(f"Invalid PDF ID: {request.pdf_id}")
-            raise HTTPException(status_code=400, detail="Invalid PDF ID")
-
-        llm_manager = LLMManager()
-        content = get_pdf_content(request.pdf_id)
-        logger.info(f"Retrieved {len(content)} characters for PDF {request.pdf_id}")
 
         # Send request to Redis stream and wait for response
         try:
@@ -502,6 +477,7 @@ async def generate_summary(request: SummaryRequest):
                     "type": "summary",
                     "pdf_id": request.pdf_id,
                     "max_tokens": request.max_tokens,
+                    "model": request.model,
                 },
             )
 
@@ -509,10 +485,21 @@ async def generate_summary(request: SummaryRequest):
             if not response:
                 raise HTTPException(status_code=408, detail="LLM response timeout")
 
+            # Extract usage metrics from response
+            usage_metrics = response.get("usage", {})
+            if not usage_metrics:
+                logger.warning("No usage metrics found in response")
+
             return {
                 "summary": response.get("content", ""),
-                "tokens_used": len(response.get("content", "").split()),
+                "usage_metrics": {
+                    "input_tokens": usage_metrics.get("input_tokens", 0),
+                    "output_tokens": usage_metrics.get("output_tokens", 0),
+                    "total_tokens": usage_metrics.get("total_tokens", 0),
+                    "cost": usage_metrics.get("cost", 0.0),
+                },
             }
+
         except Exception as e:
             logger.error(f"LLM processing failed: {str(e)}")
             raise HTTPException(status_code=500, detail="Summary generation failed")
@@ -526,20 +513,6 @@ async def generate_summary(request: SummaryRequest):
 async def answer_pdf_question(request: QuestionRequest):
     logger = logging.getLogger(__name__)
     try:
-        # Validate PDF ID first
-        if not validate_pdf_id(request.pdf_id):
-            logger.error(f"Invalid PDF ID: {request.pdf_id}")
-            raise HTTPException(status_code=400, detail="Invalid PDF ID")
-
-        llm_manager = LLMManager()
-        content = get_pdf_content(request.pdf_id)
-        logger.info(f"Retrieved {len(content)} characters for PDF {request.pdf_id}")
-    except FileNotFoundError as e:
-        logger.error(f"PDF content lookup failed: {str(e)}")
-        raise HTTPException(status_code=404, detail="PDF content not found")
-
-    try:
-
         await send_to_redis_stream(
             "llm_requests",
             {
@@ -567,10 +540,21 @@ async def answer_pdf_question(request: QuestionRequest):
             logger.error(f"Failed response status: {response}")
             raise HTTPException(status_code=500, detail="LLM service processing failed")
 
+        # Extract usage metrics from response
+        usage_metrics = response.get("usage", {})
+        if not usage_metrics:
+            logger.warning("No usage metrics found in response")
+
         return {
             "question": request.question,
             "answer": content,
             "source_pdf": request.pdf_id,
+            "usage_metrics": {
+                "input_tokens": usage_metrics.get("input_tokens", 0),
+                "output_tokens": usage_metrics.get("output_tokens", 0),
+                "total_tokens": usage_metrics.get("total_tokens", 0),
+                "cost": usage_metrics.get("cost", 0.0),
+            },
             "status": "success",
         }
     except Exception as e:

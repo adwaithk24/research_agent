@@ -2,12 +2,14 @@ import asyncio
 import json
 import logging
 from typing import Dict, Any, Optional
+import litellm
 
 from llm_manager import LLMManager
 from redis_manager import (
     receive_from_redis_stream,
     send_to_redis_stream,
     get_pdf_content,
+    set_stream_checkpoint,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,24 +27,37 @@ class LLMService:
         try:
             question = request.get("question")
             pdf_id = request.get("pdf_id")
-            max_tokens = request.get("max_tokens", 1000)
+            max_tokens = request.get("max_tokens", 5000)
+            model = request.get("model", "gemini/gemini-2.0-flash")
 
             if not question or not pdf_id:
                 raise ValueError("Question and PDF ID are required")
 
-            # Get PDF content from Redis
-            pdf_content = await get_pdf_content(pdf_id)
-            if not pdf_content:
-                raise ValueError("PDF content not found")
+            try:
+                # Get PDF content from Redis with improved error handling
+                pdf_content = await get_pdf_content(pdf_id)
+                context = pdf_content.decode("utf-8")
 
-            # Decode PDF content from bytes
-            context = pdf_content.decode("utf-8")
+                answer, usage_metrics = await self.llm_manager.ask_question(
+                    context=context,
+                    question=question,
+                    max_tokens=max_tokens,
+                    model=model,
+                )
 
-            answer = await self.llm_manager.ask_question(
-                context=context, question=question, max_tokens=max_tokens
-            )
-
-            return {"type": "question_response", "content": answer, "status": "success"}
+                return {
+                    "type": "question_response",
+                    "content": answer,
+                    "status": "success",
+                    "usage": usage_metrics,
+                }
+            except ValueError as e:
+                logger.error(f"PDF content error: {str(e)}")
+                return {
+                    "type": "question_response",
+                    "content": f"Error: {str(e)}",
+                    "status": "error",
+                }
         except Exception as e:
             logger.error(f"Error processing question: {str(e)}")
             return {"type": "question_response", "content": str(e), "status": "error"}
@@ -50,7 +65,8 @@ class LLMService:
     async def _handle_summary(self, request: Dict[str, Any]) -> Dict[str, Any]:
         try:
             pdf_id = request.get("pdf_id")
-            max_tokens = request.get("max_tokens", 1000)
+            max_tokens = request.get("max_tokens", 5000)
+            model = request.get("model", "gemini/gemini-2.0-flash")
 
             if not pdf_id:
                 raise ValueError("PDF ID is required")
@@ -63,11 +79,16 @@ class LLMService:
             # Decode PDF content from bytes
             text = pdf_content.decode("utf-8")
 
-            summary = await self.llm_manager.get_summary(
-                text=text, max_tokens=max_tokens
+            summary, usage_metrics = await self.llm_manager.get_summary(
+                text=text, max_tokens=max_tokens, model=model
             )
 
-            return {"type": "summary_response", "content": summary, "status": "success"}
+            return {
+                "type": "summary_response",
+                "content": summary,
+                "status": "success",
+                "usage": usage_metrics,
+            }
         except Exception as e:
             logger.error(f"Error processing summary: {str(e)}")
             return {"type": "summary_response", "content": str(e), "status": "error"}
@@ -94,13 +115,12 @@ class LLMService:
 
     async def start(self):
         logger.info("Starting LLM Service...")
-        last_id = "0"
         max_retries = 3
 
         while True:
             try:
-                # Read from llm_requests stream
-                messages = await receive_from_redis_stream("llm_requests", last_id)
+                # Read from llm_requests stream using checkpoint mechanism
+                messages = await receive_from_redis_stream("llm_requests")
 
                 if not messages:
                     await asyncio.sleep(0.1)  # Avoid busy waiting
@@ -109,8 +129,8 @@ class LLMService:
                 stream_name, stream_messages = messages[0]
                 message_id, message_data = stream_messages[0]
 
-                # Update last_id for next iteration
-                last_id = message_id
+                # Update checkpoint with latest processed message ID
+                await set_stream_checkpoint("llm_requests", message_id)
 
                 # Process request
                 try:
