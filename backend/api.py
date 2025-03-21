@@ -22,14 +22,12 @@ from typing import Optional
 
 from .redis_manager import (
     send_to_redis_stream, 
-    store_pdf_content,
     get_pdf_content,
     receive_llm_response
 )
 from .pipelines import (
     store_uploaded_pdf,
     get_pdf_content,
-    validate_pdf_id,
     standardize_docling,
     standardize_markitdown,
     html_to_md_docling,
@@ -422,13 +420,6 @@ async def process_url_enterprise(
 @app.post("/select_pdfcontent", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
 async def select_pdf_content(request: PDFSelection):
     try:
-        if not validate_pdf_id(request.pdf_id):
-            raise HTTPException(status_code=404, detail="Invalid PDF ID")
-
-        # Validate PDF ID first
-        if not validate_pdf_id(request.pdf_id):
-            logger.error(f"Invalid PDF ID: {request.pdf_id}")
-            raise HTTPException(status_code=400, detail="Invalid PDF ID")
 
         content = get_pdf_content(request.pdf_id)
         return {
@@ -446,22 +437,18 @@ async def upload_pdf(file: UploadFile):
 
     try:
         contents = await file.read()
-        pdf_id = store_uploaded_pdf(contents, "docling")
+        pdf_id = store_uploaded_pdf(contents, "mistral")
         contents = get_pdf_content(pdf_id)
         
-        # Store PDF content in Redis stream for LLM processing
+        # Send text content to stream for processing
         try:
-            # Store raw PDF content
-            await store_pdf_content(pdf_id, contents)
-            
-            # Send text content to stream for processing
             await send_to_redis_stream('pdf_content', {
                 'pdf_id': pdf_id,
                 'content': contents,
             })
-            logger.info(f"PDF {pdf_id} content stored and sent to stream")
+            logger.info(f"PDF {pdf_id} content sent to stream")
         except Exception as e:
-            logger.error(f"Failed to store PDF in Redis: {str(e)}")
+            logger.error(f"Failed to process PDF: {str(e)}")
             raise
         return PDFUploadResponse(
             pdf_id=pdf_id, status="success", message=f"PDF stored with ID: {pdf_id}"
@@ -476,10 +463,6 @@ async def generate_summary(request: SummaryRequest):
     logger = logging.getLogger(__name__)
 
     try:
-        # Validate PDF ID first
-        if not validate_pdf_id(request.pdf_id):
-            logger.error(f"Invalid PDF ID: {request.pdf_id}")
-            raise HTTPException(status_code=400, detail="Invalid PDF ID")
 
         # Send request to Redis stream and wait for response
         try:

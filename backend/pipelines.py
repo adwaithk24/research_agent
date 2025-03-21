@@ -70,13 +70,6 @@ def get_pdf_content(pdf_id: str) -> str:
     with open(markdown_path, "r") as f:
         return f.read()
 
-
-def validate_pdf_id(pdf_id: str) -> bool:
-    """Validate if PDF ID exists in the storage system"""
-    pdf_path = output / f"{pdf_id}.pdf"
-    return pdf_path.exists()
-
-
 def html_to_md_docling(url: str, job_name: uuid):
     s3_prefix_text = "html/html-parser/extracted-text"
     s3_prefix_images = "html/html-parser/extracted-images"

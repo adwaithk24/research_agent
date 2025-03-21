@@ -12,7 +12,6 @@ redis_client = redis.from_url('redis://localhost:6379/0', decode_responses=False
 # Constants
 DEFAULT_TIMEOUT = 30  # seconds
 PDF_CONTENT_PREFIX = 'pdf:content:'
-PDF_METADATA_PREFIX = 'pdf:metadata:'
 STREAM_CHECKPOINT_PREFIX = 'stream:checkpoint:'
 
 async def send_to_redis_stream(stream_name: str, message: Dict[str, Union[bytes, Any]], maxlen: int = 1000) -> str:
@@ -95,57 +94,6 @@ async def receive_from_redis_stream(stream_name: str, last_id: str = None, timeo
         logger.error(f"Error receiving message from stream {stream_name}: {e}")
         raise
 
-async def store_pdf_content(pdf_id: str, content: Union[str, bytes], metadata: Optional[Dict[str, Any]] = None) -> bool:
-    """Store PDF content and metadata in Redis.
-    
-    Args:
-        pdf_id: Unique identifier for the PDF
-        content: PDF content as string or bytes
-        metadata: Optional metadata dictionary
-        
-    Returns:
-        bool: True if storage was successful
-    """
-    if not pdf_id:
-        logger.error("PDF ID is required")
-        return False
-
-    if not content:
-        logger.error("PDF content is required")
-        return False
-
-    try:
-        # Ensure content is in bytes
-        content_bytes = content if isinstance(content, bytes) else content.encode('utf-8')
-        
-        # Store PDF content
-        await redis_client.set(
-            f"{PDF_CONTENT_PREFIX}{pdf_id}",
-            content_bytes,
-            ex=86400  # expire after 24 hours
-        )
-        logger.info(f"Successfully stored PDF content for ID: {pdf_id}")
-        
-        # Store metadata if provided
-        if metadata:
-            try:
-                metadata_json = json.dumps(metadata)
-                await redis_client.set(
-                    f"{PDF_METADATA_PREFIX}{pdf_id}",
-                    metadata_json,
-                    ex=86400
-                )
-                logger.info(f"Successfully stored metadata for PDF ID: {pdf_id}")
-            except (TypeError, json.JSONDecodeError) as e:
-                logger.error(f"Failed to serialize metadata for PDF {pdf_id}: {e}")
-                return False
-        return True
-    except redis.RedisError as e:
-        logger.error(f"Redis error while storing PDF {pdf_id}: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"Unexpected error while storing PDF {pdf_id}: {e}")
-        return False
 
 async def get_pdf_content(pdf_id: str) -> Optional[bytes]:
     """Get PDF content from Redis.
@@ -169,7 +117,6 @@ async def get_pdf_content(pdf_id: str) -> Optional[bytes]:
     except Exception as e:
         logger.error(f"Unexpected error getting PDF content: {e}")
         raise
-
 async def send_llm_request(prompt: str, model_name: str, max_tokens: Optional[int] = None) -> str:
     """Send LLM request to Redis Stream.
     
