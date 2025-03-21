@@ -37,7 +37,7 @@ class LLMService:
                 pdf_content = await get_pdf_content(pdf_id)
                 context = pdf_content.decode('utf-8')
                 
-                answer = await self.llm_manager.ask_question(
+                answer, usage_metrics = await self.llm_manager.ask_question(
                     context=context,
                     question=question,
                     max_tokens=max_tokens,
@@ -47,7 +47,8 @@ class LLMService:
                 return {
                     'type': 'question_response',
                     'content': answer,
-                    'status': 'success'
+                    'status': 'success',
+                    'usage': usage_metrics
                 }
             except ValueError as e:
                 logger.error(f"PDF content error: {str(e)}")
@@ -81,7 +82,7 @@ class LLMService:
             # Decode PDF content from bytes
             text = pdf_content.decode('utf-8')
             
-            summary = await self.llm_manager.get_summary(
+            summary, usage_metrics = await self.llm_manager.get_summary(
                 text=text,
                 max_tokens=max_tokens,
                 model=model
@@ -90,7 +91,8 @@ class LLMService:
             return {
                 'type': 'summary_response',
                 'content': summary,
-                'status': 'success'
+                'status': 'success',
+                'usage': usage_metrics
             }
         except Exception as e:
             logger.error(f'Error processing summary: {str(e)}')

@@ -126,9 +126,19 @@ def send_message():
         )
 
         if response.status_code == 200:
-            answer = response.json().get(
-                "answer", "Sorry, I couldn't process your question."
-            )
+            response_data = response.json()
+            answer = response_data.get("answer", "Sorry, I couldn't process your question.")
+            
+            # Display token usage and cost metrics
+            with st.expander("📊 Token Usage & Cost", expanded=False):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Input Tokens", response_data.get("input_tokens", "N/A"))
+                with col2:
+                    st.metric("Output Tokens", response_data.get("output_tokens", "N/A"))
+                with col3:
+                    st.metric("Cost ($)", f"${response_data.get('cost', 0):.4f}")
+            
             st.session_state.messages[chat_id].append(
                 {"role": "assistant", "content": answer}
             )
@@ -200,9 +210,19 @@ def generate_summary(chat_id):
         )
 
         if response.status_code == 200:
-            summary = response.json().get(
-                "summary", "Sorry, I couldn't generate a summary."
-            )
+            response_data = response.json()
+            summary = response_data.get("summary", "Sorry, I couldn't generate a summary.")
+            
+            # Display token usage and cost metrics for summary
+            with st.expander("📊 Summary Token Usage & Cost", expanded=False):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Input Tokens", response_data.get("input_tokens", "N/A"))
+                with col2:
+                    st.metric("Output Tokens", response_data.get("output_tokens", "N/A"))
+                with col3:
+                    st.metric("Cost ($)", f"${response_data.get('cost', 0):.4f}")
+            
             st.session_state.messages[chat_id].append(
                 {
                     "role": "assistant",

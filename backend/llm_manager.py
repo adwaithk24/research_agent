@@ -50,7 +50,13 @@ class LLMManager:
                 logger.error(f"Invalid response content type: {type(content)}")
                 raise Exception("Invalid LLM response format")
                 
-            return content
+            usage_metrics = {
+                'input_tokens': input_tokens,
+                'output_tokens': output_tokens,
+                'total_tokens': input_tokens + output_tokens,
+                'cost': cost
+            }
+            return content, usage_metrics
 
         except litellm.exceptions.APIError as e:
             logger.error(f"API Error: {str(e)}")
@@ -73,11 +79,11 @@ class LLMManager:
 
         try:
             logger.info("LLMManager: Generating summary...")
-            response = await self.get_llm_response(prompt, model)
-            return response.strip()
+            response, usage_metrics = await self.get_llm_response(prompt, model)
+            return response.strip(), usage_metrics
         except Exception as e:
             logger.error(f"Summary generation failed: {str(e)}")
-            return "Summary unavailable: processing error occurred"
+            return "Summary unavailable: processing error occurred", None
 
     async def ask_question(self, context: str, question: str, max_tokens: int, model: str = "gemini/gemini-2.0-flash") -> str:
         """Answer question based on provided context"""
@@ -91,9 +97,9 @@ class LLMManager:
         
         try:
             logger.info("LLMManager: Asking question...")
-            response = await self.get_llm_response(prompt, model)
-            return response.strip()
+            response, usage_metrics = await self.get_llm_response(prompt, model)
+            return response.strip(), usage_metrics
         except Exception as e:
             logger.error(f"Question answering failed: {str(e)}")
-            return "Answer unavailable: processing error occurred"
+            return "Answer unavailable: processing error occurred", None
         

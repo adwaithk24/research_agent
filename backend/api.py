@@ -493,11 +493,22 @@ async def generate_summary(request: SummaryRequest):
             response = await receive_llm_response()
             if not response:
                 raise HTTPException(status_code=408, detail="LLM response timeout")
-            
+
+            # Extract usage metrics from response
+            usage_metrics = response.get('usage', {})
+            if not usage_metrics:
+                logger.warning("No usage metrics found in response")
+
             return {
                 "summary": response.get('content', ''), 
-                "tokens_used": len(response.get('content', '').split())
+                "usage_metrics": {
+                "input_tokens": usage_metrics.get('input_tokens', 0),
+                "output_tokens": usage_metrics.get('output_tokens', 0),
+                "total_tokens": usage_metrics.get('total_tokens', 0),
+                "cost": usage_metrics.get('cost', 0.0)
+                }   
             }
+            
         except Exception as e:
             logger.error(f"LLM processing failed: {str(e)}")
             raise HTTPException(status_code=500, detail="Summary generation failed")
@@ -533,10 +544,21 @@ async def answer_pdf_question(request: QuestionRequest):
             logger.error(f"Failed response status: {response}")
             raise HTTPException(status_code=500, detail="LLM service processing failed")
 
+        # Extract usage metrics from response
+        usage_metrics = response.get('usage', {})
+        if not usage_metrics:
+            logger.warning("No usage metrics found in response")
+
         return {
             "question": request.question,
             "answer": content,
             "source_pdf": request.pdf_id,
+            "usage_metrics": {
+                "input_tokens": usage_metrics.get('input_tokens', 0),
+                "output_tokens": usage_metrics.get('output_tokens', 0),
+                "total_tokens": usage_metrics.get('total_tokens', 0),
+                "cost": usage_metrics.get('cost', 0.0)
+            },
             "status": "success"
         }
     except Exception as e:
