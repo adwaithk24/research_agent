@@ -7,7 +7,7 @@ import pandas as pd
 from docling.document_converter import DocumentConverter
 from mistralai import DocumentURLChunk, FilePurpose, Mistral
 
-from cloud_ops import (
+from .cloud_ops import (
     download_file_from_s3,
     upload_file_to_s3,
     upload_directory_to_s3,

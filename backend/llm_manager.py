@@ -1,6 +1,6 @@
 import os
 import litellm
-from litellm import acompletion
+from litellm import acompletion, completion_cost
 import logging
 from dotenv import load_dotenv
 
@@ -10,15 +10,14 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# LiteLLM configuration
-litellm.set_verbose = True
-
 class LLMManager:
     def __init__(self):
         self.model_config = {
             "gpt-3.5-turbo": os.getenv("OPENAI_API_KEY"),
-            # "claude-3": os.getenv("ANTHROPIC_API_KEY"),
-            # "command": os.getenv("COHERE_API_KEY")
+            "gemini/gemini-2.0-flash": os.getenv("GEMINI_API_KEY"),
+            "deepseek-chat": os.getenv("DEEPSEEK_API_KEY"),
+            "claude-3-7-sonnet-20250219": os.getenv("ANTHROPIC_API_KEY"),
+            "grok-2-latest": os.getenv("XAI_API_KEY")
         }
         # Validate environment variables
         for model, key in self.model_config.items():
@@ -26,11 +25,12 @@ class LLMManager:
                 logger.error(f"Missing API key for {model} in environment variables")
                 raise ValueError(f"API key for {model} not configured")
 
-    async def get_llm_response(self, prompt: str, model_name: str = "gpt-4") -> str:
+    async def get_llm_response(self, prompt: str, model_name: str = "gemini/gemini-2.0-flash") -> str:
         """
         Get LLM response with usage tracking and error handling
         """
         try:
+            logger.info(f"LLMManager: Sending request to {model_name}...")
             response = await acompletion(
                 model=model_name,
                 messages=[{"role": "user", "content": prompt}],
@@ -40,7 +40,7 @@ class LLMManager:
             # Track usage
             input_tokens = response['usage']['prompt_tokens']
             output_tokens = response['usage']['completion_tokens']
-            cost = self._calculate_cost(model_name, input_tokens, output_tokens)
+            cost = completion_cost(completion_response=response, model=model_name)
             
             logger.info(f"LLM Usage - Model: {model_name}, Input Tokens: {input_tokens}, "
                         f"Output Tokens: {output_tokens}, Estimated Cost: ${cost:.4f}")
@@ -49,7 +49,14 @@ class LLMManager:
             if not isinstance(content, str):
                 logger.error(f"Invalid response content type: {type(content)}")
                 raise Exception("Invalid LLM response format")
-            return content
+                
+            usage_metrics = {
+                'input_tokens': input_tokens,
+                'output_tokens': output_tokens,
+                'total_tokens': input_tokens + output_tokens,
+                'cost': cost
+            }
+            return content, usage_metrics
 
         except litellm.exceptions.APIError as e:
             logger.error(f"API Error: {str(e)}")
@@ -61,41 +68,24 @@ class LLMManager:
             logger.error(f"Unexpected error: {str(e)}")
             raise Exception("Failed to process LLM request")
 
-    def _calculate_cost(self, model_name: str, input_tokens: int, output_tokens: int) -> float:
-        """
-        Calculate estimated cost based on model pricing
-        """
-        pricing = {
-            "gpt-3.5-turbo": {"input": 0.03, "output": 0.06},
-            # "claude-3": {"input": 0.015, "output": 0.075},
-            # "command": {"input": 0.015, "output": 0.045}
-        }
-        
-        if model_name not in pricing:
-            logger.warning(f"No pricing data for model: {model_name}")
-            return 0.0
-
-        cost = (input_tokens * pricing[model_name]["input"] / 1000) + \
-               (output_tokens * pricing[model_name]["output"] / 1000)
-        return cost
-
-    async def get_summary(self, text: str, max_tokens: int) -> str:
+    async def get_summary(self, text: str, max_tokens: int, model: str = "gemini/gemini-2.0-flash") -> str:
         """Generate summary from markdown-formatted text"""
         prompt = (
             "Analyze this markdown document and create a comprehensive summary. "
             "Focus on the main content while ignoring markdown syntax. "
             "Keep the summary under {max_tokens} tokens.\n\n"
             "Document content:\n{content}"
-        ).format(max_tokens=max_tokens, content=text[:15000])  # Truncate to 15k chars
+        ).format(max_tokens=max_tokens, content=text)  
 
         try:
-            response = await self.get_llm_response(prompt, model_name="gpt-3.5-turbo")
-            return response.strip()
+            logger.info("LLMManager: Generating summary...")
+            response, usage_metrics = await self.get_llm_response(prompt, model)
+            return response.strip(), usage_metrics
         except Exception as e:
             logger.error(f"Summary generation failed: {str(e)}")
-            return "Summary unavailable: processing error occurred"
+            return "Summary unavailable: processing error occurred", None
 
-    async def ask_question(self, context: str, question: str, max_tokens: int) -> str:
+    async def ask_question(self, context: str, question: str, max_tokens: int, model: str = "gemini/gemini-2.0-flash") -> str:
         """Answer question based on provided context"""
         prompt = (
         "Context:\n{context}\n\nQuestion: {question}\n\n"
@@ -104,11 +94,12 @@ class LLMManager:
         "- Maximum {max_tokens} tokens"
         "- If unsure, state \"I cannot determine from the provided content"
         ).format(context=context, question=question, max_tokens=max_tokens)
-
+        
         try:
-            response = await self.get_llm_response(prompt, model_name="gpt-3.5-turbo")
-            return response.strip()
+            logger.info("LLMManager: Asking question...")
+            response, usage_metrics = await self.get_llm_response(prompt, model)
+            return response.strip(), usage_metrics
         except Exception as e:
             logger.error(f"Question answering failed: {str(e)}")
-            return "Answer unavailable: processing error occurred"
+            return "Answer unavailable: processing error occurred", None
         
