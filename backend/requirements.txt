@@ -22,3 +22,4 @@ chunking_evaluation @ git+https://github.com/brandonstarxel/chunking_evaluation@
 chromadb==0.6.3
 numpy
 pinecone
+google-generativeai==0.8.4
