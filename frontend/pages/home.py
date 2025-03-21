@@ -41,11 +41,24 @@ if "current_chat_id" not in ss:
 if "new_chat_name" not in ss:
     ss.new_chat_name = ""
 
+if "input_tokens" not in ss:
+    ss.input_tokens = 0
 
-# def login():
-#     # TODO: IMPLEMENT AUTHENTICATION
-#     st.session_state.authenticated = True
-#     st.rerun()
+if "output_tokens" not in ss:
+    ss.output_tokens = 0
+
+if "cost" not in ss:
+    ss.cost = 0
+
+
+ss.chats["1"] = {
+    "id": "1",
+    "name": "nvidia",
+    "created_at": "2025-03-22 12:00:00",
+    "has_pdf": True,
+    "pdf_id": "1",
+    "pdf_name": "nvidia.pdf",
+}
 
 
 def upload_pdf_to_backend(file, chat_id, ocr_method: str):
@@ -54,7 +67,11 @@ def upload_pdf_to_backend(file, chat_id, ocr_method: str):
         response = requests.post(
             "http://localhost:8000/upload_pdf",
             files={"file": (file.name, file, "application/pdf")},
-            params={"parser": ocr_method},
+            params={
+                "parser": ocr_method,
+                "chunking_strategy": chunking_strategy,
+                "vector_store": vector_store,
+            },
         )
         if response.status_code == 201:
             response_data = response.json()
@@ -143,16 +160,11 @@ def send_message():
             )
 
             # Display token usage and cost metrics
-            with st.expander("📊 Token Usage & Cost", expanded=False):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Input Tokens", response_data.get("input_tokens", "N/A"))
-                with col2:
-                    st.metric(
-                        "Output Tokens", response_data.get("output_tokens", "N/A")
-                    )
-                with col3:
-                    st.metric("Cost ($)", f"${response_data.get('cost', 0):.4f}")
+            usage_metrics = response_data.get("usage_metrics", {})
+            if usage_metrics:
+                ss.input_tokens += usage_metrics.get("input_tokens", 0)
+                ss.output_tokens += usage_metrics.get("output_tokens", 0)
+                ss.cost += usage_metrics.get("cost", 0)
 
             ss.messages[chat_id].append({"role": "assistant", "content": answer})
             logger.info(f"Answer received from backend: {answer}")
@@ -224,27 +236,19 @@ def generate_summary(chat_id):
 
     try:
         response = requests.post(
-            "http://localhost:8000/summarize/",
-            json={"pdf_id": pdf_id, "summary_length": 200},  # Default summary length
+            "http://localhost:8000/ask_question",
+            json={
+                "pdf_id": pdf_id,
+                "question": "Summarize the document",
+                "max_tokens": 500,  # You can adjust this value
+            },
         )
         logger.info(f"Summary response: {response.json()}")
         if response.status_code == 200:
             response_data = response.json()
             summary = response_data.get(
-                "summary", "Sorry, I couldn't generate a summary."
+                "answer", "Sorry, I couldn't process your question."
             )
-
-            # Display token usage and cost metrics for summary
-            with st.expander("📊 Summary Token Usage & Cost", expanded=False):
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Input Tokens", response_data.get("input_tokens", "N/A"))
-                with col2:
-                    st.metric(
-                        "Output Tokens", response_data.get("output_tokens", "N/A")
-                    )
-                with col3:
-                    st.metric("Cost ($)", f"${response_data.get('cost', 0):.4f}")
 
             ss.messages[chat_id].append(
                 {
@@ -253,6 +257,11 @@ def generate_summary(chat_id):
                 }
             )
             logger.info(f"Summary generated: {summary}")
+            usage_metrics = response_data.get("usage_metrics", {})
+            if usage_metrics:
+                ss.input_tokens += usage_metrics.get("input_tokens", 0)
+                ss.output_tokens += usage_metrics.get("output_tokens", 0)
+                ss.cost += usage_metrics.get("cost", 0)
             # Mark summary as generated
             # st.session_state.chats[chat_id]["summary_generated"] = True
         else:
@@ -278,7 +287,7 @@ def generate_summary(chat_id):
 
 # def render_main_app(authenticator: stauth.Authenticate):
 authenticator.logout()
-left_col, middle_col = st.columns([20, 80])
+left_col, middle_col, right_col = st.columns([20, 60, 20])
 
 with left_col:
     st.header("Create New Chat")
@@ -407,11 +416,9 @@ with middle_col:
                 "👈 Use the left panel to create a new chat or select an existing one"
             )
 
-# with right_col:
-#     st.header("Data Selection")
-
-#     st.write("Select data to insert into chat:")
-
-#     for data_item in st.session_state.column_data:
-#         if st.button(data_item, key=f"data_{data_item}", use_container_width=True):
-#             insert_column_data(data_item)
+with right_col:
+    st.header("Usage Metrics")
+    with st.expander("📊 Summary Token Usage & Cost", expanded=True):
+        st.metric("Input Tokens", ss.get("input_tokens", "N/A"))
+        st.metric("Output Tokens", ss.get("output_tokens", "N/A"))
+        st.metric("Cost ($)", f"${ss.get('cost', 0):.4f}")

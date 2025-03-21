@@ -7,6 +7,8 @@ from vector_store import add_chunks_to_collection, retrieve_relevant_chunks
 
 
 class RAGPipeline:
+    PERSISTENT_PATH = "chroma_db"
+
     def __init__(
         self,
         pdf_id: str,
@@ -31,7 +33,7 @@ class RAGPipeline:
 
         match self.vector_store:
             case "chroma":
-                client = chromadb.PersistentClient(path="./backend/chroma_db")
+                client = chromadb.PersistentClient(path=self.PERSISTENT_PATH)
                 collection = client.get_or_create_collection(self.pdf_id)
                 add_chunks_to_collection(collection, chunks)
             case "pinecone":
@@ -42,7 +44,7 @@ class RAGPipeline:
     def get_relevant_chunks(self, query: str, k: int = 5):
         match self.vector_store:
             case "chroma":
-                client = chromadb.PersistentClient(path=".chroma_db")
+                client = chromadb.PersistentClient(path=self.PERSISTENT_PATH)
                 collection = client.get_or_create_collection(self.pdf_id)
                 return retrieve_relevant_chunks(collection, query, k)
             case _:
