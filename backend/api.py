@@ -653,17 +653,47 @@ async def ask_nvidia(request: QuestionRequest, year: Optional[str] = None, quart
         )
         pipeline.process()
         
-        relevant_chunks = pipeline.get_relevant_chunks(
+        context = pipeline.get_relevant_chunks(
             query=request.question,
             k=5
         )
         
-        response = answer_question_rag(
-            query=request.question,
-            model_name=request.model,
-            text='\n'.join(relevant_chunks)
+        system_message = """You are a helpful assistant that provides accurate information based on the given context. 
+                            If the context doesn't contain relevant information to answer the question, acknowledge that and provide general information if possible.
+                            Always cite your sources by referring to the source numbers provided in brackets. Do not make up information."""
+
+        # Define the user message with query and context
+        user_message = f"""Question: {request.question}
+        
+        Context information:
+        {context}
+        
+        Please answer the question based on the context information provided."""
+        prompt = {
+            "system_message": system_message,
+            "user_message": user_message,
+        }
+
+        llm_manager = LLMManager()
+        content, usage_metrics = await llm_manager.get_llm_response(
+            prompt, request.model
         )
-        return response
+
+        if not usage_metrics:
+            logger.warning("No usage metrics found in response")
+
+        return {
+            "question": request.question,
+            "answer": content,
+            "source_pdf": request.pdf_id,
+            "usage_metrics": {
+                "input_tokens": usage_metrics.get("input_tokens", 0),
+                "output_tokens": usage_metrics.get("output_tokens", 0),
+                "total_tokens": usage_metrics.get("total_tokens", 0),
+                "cost": usage_metrics.get("cost", 0.0),
+            },
+            "status": "success",
+        }
     except Exception as e:
         logger.error(f"Error in NVIDIA RAG query: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
