@@ -5,6 +5,7 @@ import chromadb
 import os
 import openai
 import numpy as np
+import logging as logger
 
 from chunker import recursive_chunker, kamradt_chunker
 from vector_store import add_chunks_to_collection, retrieve_relevant_chunks
@@ -16,10 +17,12 @@ class RAGPipeline:
         self,
         pdf_id: str,
         text: str,
-        vector_store: Literal["chroma", "pinecone", "naive"],
+        vector_store: Literal["chroma", "pinecone", "naive", "nvidia"],
         chunking_strategy: Literal["recursive", "semantic", "fixed", "kamradt"],
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
+    year: Optional[str] = None,
+    quarter: Optional[str] = None,
     ):
         self.pdf_id = pdf_id
         self.vector_store = vector_store
@@ -28,6 +31,8 @@ class RAGPipeline:
         self.chunks = []
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.year = year
+        self.quarter = quarter
 
     def process(self):
         match self.chunking_strategy:
@@ -67,6 +72,24 @@ class RAGPipeline:
                 index = pc.Index(index_name)
                 vectors = [
                     {"id": f"chunk-{i}", "values": emb.tolist(), "metadata": {"text": chunk}}
+                    for i, (chunk, emb) in enumerate(zip(chunks, embeddings))
+                ]
+                index.upsert(vectors=vectors)
+            case "nvidia":
+                if not os.environ.get("PINECONE_API_KEY"):
+                    raise ValueError("PINECONE_API_KEY environment variable is required for Pinecone.")
+                pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
+                embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+                embeddings = embedding_model.encode(chunks)
+                
+                index_name = "document-embeddings-v2"
+                if index_name not in pc.list_indexes().names():
+                    logger.info("NVIDIA index not found")
+                    raise ValueError("NVIDIA index not found")
+                
+                index = pc.Index(index_name)
+                vectors = [
+                    {"id": f"chunk-{i}", "values": emb.tolist(), "metadata": {"text": chunk, "year": self.year, "quarter": self.quarter}}
                     for i, (chunk, emb) in enumerate(zip(chunks, embeddings))
                 ]
                 index.upsert(vectors=vectors)
@@ -113,6 +136,26 @@ class RAGPipeline:
                 index = pc.Index(self.pdf_id)
                 query_embedding = embedding_model.encode([query])[0].tolist()
                 results = index.query(vector=query_embedding, top_k=k, include_metadata=True)
+                return [match['metadata']['text'] for match in results['matches']]
+            case "nvidia":
+                filter_dict = {}
+                if self.year:
+                    filter_dict["year"] = {"$eq": self.year}
+                if self.quarter:
+                    filter_dict["quarter"] = {"$eq": self.quarter}
+                if not os.environ.get("PINECONE_API_KEY"):
+                    raise ValueError("PINECONE_API_KEY environment variable is required for Pinecone.")
+                pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
+                embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+                index = pc.Index("document-embeddings-v2")
+                query_embedding = embedding_model.encode([query])[0].tolist()
+
+                results = index.query(
+                    vector=query_embedding,
+                    top_k=k,
+                    include_metadata=True,
+                    filter=filter_dict if filter_dict else None
+                )
                 return [match['metadata']['text'] for match in results['matches']]
             case _:
                 raise ValueError(f"Unsupported vector store: {self.vector_store}")

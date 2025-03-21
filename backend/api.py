@@ -93,7 +93,6 @@ class QuestionRequest(BaseModel):
 
 active_rag_pipelines = {}
 
-
 @app.post("/processurl/", status_code=status.HTTP_200_OK)
 async def process_url(
     background_tasks: BackgroundTasks,
@@ -641,7 +640,64 @@ async def answer_pdf_question(request: QuestionRequest):
         logger.error(f"LLM processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Question answering failed")
 
+@app.post("/ask_nvidia", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
+async def ask_nvidia(request: QuestionRequest, year: Optional[str] = None, quarter: Optional[str] = None):
+    try:
+        pipeline = RAGPipeline(
+            pdf_id="0000",
+            text="",
+            vector_store="nvidia",
+            chunking_strategy="recursive",
+            year=year,
+            quarter=quarter
+        )
+        pipeline.process()
+        
+        context = pipeline.get_relevant_chunks(
+            query=request.question,
+            k=5
+        )
+        
+        system_message = """You are a helpful assistant that provides accurate information based on the given context. 
+                            If the context doesn't contain relevant information to answer the question, acknowledge that and provide general information if possible.
+                            Always cite your sources by referring to the source numbers provided in brackets. Do not make up information."""
 
+        # Define the user message with query and context
+        user_message = f"""Question: {request.question}
+        
+        Context information:
+        {context}
+        
+        Please answer the question based on the context information provided."""
+        prompt = {
+            "system_message": system_message,
+            "user_message": user_message,
+        }
+
+        llm_manager = LLMManager()
+        content, usage_metrics = await llm_manager.get_llm_response(
+            prompt, request.model
+        )
+
+        if not usage_metrics:
+            logger.warning("No usage metrics found in response")
+
+        return {
+            "question": request.question,
+            "answer": content,
+            "source_pdf": request.pdf_id,
+            "usage_metrics": {
+                "input_tokens": usage_metrics.get("input_tokens", 0),
+                "output_tokens": usage_metrics.get("output_tokens", 0),
+                "total_tokens": usage_metrics.get("total_tokens", 0),
+                "cost": usage_metrics.get("cost", 0.0),
+            },
+            "status": "success",
+        }
+    except Exception as e:
+        logger.error(f"Error in NVIDIA RAG query: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
 def create_zip_archive(result, include_markdown, include_images, include_tables):
     flag = False
     messages = []
