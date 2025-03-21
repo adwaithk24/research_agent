@@ -2,7 +2,7 @@ import redis.asyncio as redis
 import json
 import logging
 from typing import Optional, Dict, Any, Union
-from datetime import datetime, timedelta
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +13,7 @@ redis_client = redis.from_url('redis://localhost:6379/0', decode_responses=False
 DEFAULT_TIMEOUT = 30  # seconds
 PDF_CONTENT_PREFIX = 'pdf:content:'
 PDF_METADATA_PREFIX = 'pdf:metadata:'
+STREAM_CHECKPOINT_PREFIX = 'stream:checkpoint:'
 
 async def send_to_redis_stream(stream_name: str, message: Dict[str, Union[bytes, Any]], maxlen: int = 1000) -> str:
     """Send a message to a Redis Stream asynchronously.
@@ -46,19 +47,49 @@ async def send_to_redis_stream(stream_name: str, message: Dict[str, Union[bytes,
         logger.error(f"Error sending message to stream {stream_name}: {e}")
         raise
 
-async def receive_from_redis_stream(stream_name: str, last_id: str = '0', timeout: int = DEFAULT_TIMEOUT) -> list:
+async def get_stream_checkpoint(stream_name: str) -> str:
+    """Get the last processed message ID for a stream.
+    
+    Args:
+        stream_name: Name of the Redis stream
+        
+    Returns:
+        str: Last processed message ID or '0' if not found
+    """
+    try:
+        checkpoint = await redis_client.get(f"{STREAM_CHECKPOINT_PREFIX}{stream_name}")
+        return checkpoint.decode() if checkpoint else '0'
+    except redis.RedisError as e:
+        logger.error(f"Error getting stream checkpoint: {e}")
+        return '0'
+
+async def set_stream_checkpoint(stream_name: str, message_id: str) -> None:
+    """Save the last processed message ID for a stream.
+    
+    Args:
+        stream_name: Name of the Redis stream
+        message_id: Message ID to save as checkpoint
+    """
+    try:
+        await redis_client.set(f"{STREAM_CHECKPOINT_PREFIX}{stream_name}", message_id)
+    except redis.RedisError as e:
+        logger.error(f"Error setting stream checkpoint: {e}")
+
+async def receive_from_redis_stream(stream_name: str, last_id: str = None, timeout: int = DEFAULT_TIMEOUT) -> list:
     """Receive a message from a Redis Stream with timeout asynchronously.
     
     Args:
         stream_name: Name of the Redis stream
-        last_id: Last message ID received
+        last_id: Last message ID received, if None will use checkpoint
         timeout: Time to wait for new messages in seconds
         
     Returns:
         list: List of messages from the stream
     """
     try:
-        logger.info("Receiving message from stream")
+        if last_id is None:
+            last_id = await get_stream_checkpoint(stream_name)
+        logger.info(f"Receiving message from stream {stream_name} starting from {last_id}")
         return await redis_client.xread({stream_name: last_id}, count=1, block=timeout * 1000)
     except redis.RedisError as e:
         logger.error(f"Error receiving message from stream {stream_name}: {e}")
@@ -117,19 +148,27 @@ async def store_pdf_content(pdf_id: str, content: Union[str, bytes], metadata: O
         return False
 
 async def get_pdf_content(pdf_id: str) -> Optional[bytes]:
-    """Retrieve PDF content from Redis.
+    """Get PDF content from Redis.
     
     Args:
         pdf_id: Unique identifier for the PDF
         
     Returns:
-        Optional[bytes]: PDF content if found, None otherwise
+        bytes: PDF content if found, None otherwise
     """
     try:
-        return await redis_client.get(f"{PDF_CONTENT_PREFIX}{pdf_id}")
+        logger.info(f"Getting PDF content for ID: {pdf_id}")
+        content = await redis_client.get(f"{PDF_CONTENT_PREFIX}{pdf_id}")
+        if content is None:
+            logger.error(f"PDF content not found for ID: {pdf_id}")
+            raise ValueError(f"PDF content not found for ID: {pdf_id}")
+        return content
     except redis.RedisError as e:
-        logger.error(f"Error retrieving PDF {pdf_id}: {e}")
-        return None
+        logger.error(f"Redis error getting PDF content: {e}")
+        raise Exception(f"Database error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error getting PDF content: {e}")
+        raise
 
 async def send_llm_request(prompt: str, model_name: str, max_tokens: Optional[int] = None) -> str:
     """Send LLM request to Redis Stream.

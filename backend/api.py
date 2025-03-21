@@ -4,7 +4,6 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 from contextlib import asynccontextmanager
-
 from dotenv import load_dotenv
 from fastapi import (
     FastAPI,
@@ -12,24 +11,22 @@ from fastapi import (
     HTTPException,
     status,
     BackgroundTasks,
-    Query,
-    File,
+    Query
 )
 from fastapi.responses import FileResponse, StreamingResponse
 import logging
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
-from typing import Literal, Optional
+from typing import Optional
 
-from llm_manager import LLMManager
-from redis_manager import (
+from .redis_manager import (
     send_to_redis_stream, 
     store_pdf_content,
     get_pdf_content,
     receive_llm_response
 )
-from pipelines import (
+from .pipelines import (
     store_uploaded_pdf,
     get_pdf_content,
     validate_pdf_id,
@@ -85,11 +82,13 @@ class SummaryRequest(BaseModel):
     pdf_id: str = Field(..., min_length=8, max_length=100)
     summary_length: int = Field(200, gt=50, lt=1000)
     max_tokens: int = Field(500, gt=100, lt=2000)
+    model: str = Field("gemini/gemini-2.0-flash", description="LLM model to use for summary generation")
     
 class QuestionRequest(BaseModel):
     pdf_id: str
     question: str = Field(..., min_length=10)
     max_tokens: int = Field(500, gt=100, lt=2000)
+    model: str = Field("gemini/gemini-2.0-flash", description="LLM model to use for question answering")
 
 
 @app.post("/processurl/", status_code=status.HTTP_200_OK)
@@ -447,7 +446,7 @@ async def upload_pdf(file: UploadFile):
 
     try:
         contents = await file.read()
-        pdf_id = store_uploaded_pdf(contents)
+        pdf_id = store_uploaded_pdf(contents, "docling")
         contents = get_pdf_content(pdf_id)
         
         # Store PDF content in Redis stream for LLM processing
@@ -487,7 +486,8 @@ async def generate_summary(request: SummaryRequest):
             await send_to_redis_stream('llm_requests', {
                 'type': 'summary',
                 'pdf_id': request.pdf_id,
-                'max_tokens': request.max_tokens
+                'max_tokens': request.max_tokens,
+                'model': request.model
             })
             
             response = await receive_llm_response()
@@ -514,7 +514,8 @@ async def answer_pdf_question(request: QuestionRequest):
             'type': 'question',
             'pdf_id': request.pdf_id,
             'question': request.question,
-            'max_tokens': request.max_tokens
+            'max_tokens': request.max_tokens,
+            'model': request.model
         })
             
         response = await receive_llm_response()

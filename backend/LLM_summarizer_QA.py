@@ -132,4 +132,3 @@ else:
     print("\nTotal No Of Tokens:", answer_result.get("total_tokens"))
     print("\nNo Of Input Tokens\n", answer_result.get("input_tokens"))
     print("\nNo Of Output Tokens\n", answer_result.get("output_tokens"))
-
