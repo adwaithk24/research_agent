@@ -3,131 +3,115 @@ import json
 import logging
 from typing import Dict, Any, Optional
 
-from .llm_manager import LLMManager
-from .redis_manager import receive_from_redis_stream, send_to_redis_stream, get_pdf_content
+from llm_manager import LLMManager
+from redis_manager import (
+    receive_from_redis_stream,
+    send_to_redis_stream,
+    get_pdf_content,
+)
 
 logger = logging.getLogger(__name__)
+
 
 class LLMService:
     def __init__(self):
         self.llm_manager = LLMManager()
         self.request_handlers = {
-            'question': self._handle_question,
-            'summary': self._handle_summary
+            "question": self._handle_question,
+            "summary": self._handle_summary,
         }
 
     async def _handle_question(self, request: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            question = request.get('question')
-            pdf_id = request.get('pdf_id')
-            max_tokens = request.get('max_tokens', 1000)
-            
+            question = request.get("question")
+            pdf_id = request.get("pdf_id")
+            max_tokens = request.get("max_tokens", 1000)
+
             if not question or not pdf_id:
-                raise ValueError('Question and PDF ID are required')
-            
+                raise ValueError("Question and PDF ID are required")
+
             # Get PDF content from Redis
             pdf_content = await get_pdf_content(pdf_id)
             if not pdf_content:
-                raise ValueError('PDF content not found')
-            
+                raise ValueError("PDF content not found")
+
             # Decode PDF content from bytes
-            context = pdf_content.decode('utf-8')
-            
+            context = pdf_content.decode("utf-8")
+
             answer = await self.llm_manager.ask_question(
-                context=context,
-                question=question,
-                max_tokens=max_tokens
+                context=context, question=question, max_tokens=max_tokens
             )
-            
-            return {
-                'type': 'question_response',
-                'content': answer,
-                'status': 'success'
-            }
+
+            return {"type": "question_response", "content": answer, "status": "success"}
         except Exception as e:
-            logger.error(f'Error processing question: {str(e)}')
-            return {
-                'type': 'question_response',
-                'content': str(e),
-                'status': 'error'
-            }
+            logger.error(f"Error processing question: {str(e)}")
+            return {"type": "question_response", "content": str(e), "status": "error"}
 
     async def _handle_summary(self, request: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            pdf_id = request.get('pdf_id')
-            max_tokens = request.get('max_tokens', 1000)
-            
+            pdf_id = request.get("pdf_id")
+            max_tokens = request.get("max_tokens", 1000)
+
             if not pdf_id:
-                raise ValueError('PDF ID is required')
-            
+                raise ValueError("PDF ID is required")
+
             # Get PDF content from Redis
             pdf_content = await get_pdf_content(pdf_id)
             if not pdf_content:
-                raise ValueError('PDF content not found')
-            
-            # Decode PDF content from bytes
-            text = pdf_content.decode('utf-8')
-            
-            summary = await self.llm_manager.get_summary(
-                text=text,
-                max_tokens=max_tokens
-            )
-            
-            return {
-                'type': 'summary_response',
-                'content': summary,
-                'status': 'success'
-            }
-        except Exception as e:
-            logger.error(f'Error processing summary: {str(e)}')
-            return {
-                'type': 'summary_response',
-                'content': str(e),
-                'status': 'error'
-            }
+                raise ValueError("PDF content not found")
 
-    async def process_request(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            # Decode PDF content from bytes
+            text = pdf_content.decode("utf-8")
+
+            summary = await self.llm_manager.get_summary(
+                text=text, max_tokens=max_tokens
+            )
+
+            return {"type": "summary_response", "content": summary, "status": "success"}
+        except Exception as e:
+            logger.error(f"Error processing summary: {str(e)}")
+            return {"type": "summary_response", "content": str(e), "status": "error"}
+
+    async def process_request(
+        self, request: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         try:
-            request_type = request.get('type')
+            request_type = request.get("type")
             handler = self.request_handlers.get(request_type)
-            
+
             if not handler:
-                logger.error(f'Unknown request type: {request_type}')
+                logger.error(f"Unknown request type: {request_type}")
                 return {
-                    'type': 'error',
-                    'content': f'Unknown request type: {request_type}',
-                    'status': 'error'
+                    "type": "error",
+                    "content": f"Unknown request type: {request_type}",
+                    "status": "error",
                 }
-                
+
             return await handler(request)
         except Exception as e:
-            logger.error(f'Error processing request: {str(e)}')
-            return {
-                'type': 'error',
-                'content': str(e),
-                'status': 'error'
-            }
+            logger.error(f"Error processing request: {str(e)}")
+            return {"type": "error", "content": str(e), "status": "error"}
 
     async def start(self):
-        logger.info('Starting LLM Service...')
-        last_id = '0'
+        logger.info("Starting LLM Service...")
+        last_id = "0"
         max_retries = 3
-        
+
         while True:
             try:
                 # Read from llm_requests stream
-                messages = await receive_from_redis_stream('llm_requests', last_id)
-                
+                messages = await receive_from_redis_stream("llm_requests", last_id)
+
                 if not messages:
                     await asyncio.sleep(0.1)  # Avoid busy waiting
                     continue
-                    
+
                 stream_name, stream_messages = messages[0]
                 message_id, message_data = stream_messages[0]
-                
+
                 # Update last_id for next iteration
                 last_id = message_id
-                
+
                 # Process request
                 try:
                     # Decode and parse JSON values from Redis stream
@@ -142,40 +126,47 @@ class LLMService:
                             value = v.decode()
                         request[key] = value
 
-                    if 'type' not in request:
-                        logger.error('Request type is missing')
+                    if "type" not in request:
+                        logger.error("Request type is missing")
                         continue
-                        
+
                     response = await self.process_request(request)
                 except Exception as e:
-                    logger.error(f'Error decoding request data: {str(e)}')
+                    logger.error(f"Error decoding request data: {str(e)}")
                     continue
-                
+
                 if response:
                     # Send response to llm_responses stream with retries
                     retries = 0
                     while retries < max_retries:
                         try:
-                            await send_to_redis_stream('llm_responses', response)
+                            await send_to_redis_stream("llm_responses", response)
                             break
                         except Exception as e:
                             retries += 1
                             if retries == max_retries:
-                                logger.error(f'Failed to send response after {max_retries} attempts: {str(e)}')
+                                logger.error(
+                                    f"Failed to send response after {max_retries} attempts: {str(e)}"
+                                )
                             else:
-                                logger.warning(f'Error sending response (attempt {retries}): {str(e)}')
+                                logger.warning(
+                                    f"Error sending response (attempt {retries}): {str(e)}"
+                                )
                                 await asyncio.sleep(1)
-                    
+
             except Exception as e:
-                logger.error(f'Error in service loop: {str(e)}')
+                logger.error(f"Error in service loop: {str(e)}")
                 await asyncio.sleep(1)  # Wait before retrying
+
 
 async def run_service():
     service = LLMService()
     await service.start()
 
+
 def main():
     asyncio.run(run_service())
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

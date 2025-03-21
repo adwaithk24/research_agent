@@ -54,7 +54,7 @@ llm_service = None
 async def lifespan(app: FastAPI):
     # Startup
     global llm_service
-    from .llm_service import LLMService
+    from llm_service import LLMService
 
     llm_service = LLMService()
     asyncio.create_task(llm_service.start())

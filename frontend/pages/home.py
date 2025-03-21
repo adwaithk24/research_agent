@@ -2,8 +2,10 @@ import uuid
 import datetime
 import requests
 import json
+import logging
 
 import streamlit as st
+from streamlit import session_state as ss
 import streamlit_authenticator as stauth
 import yaml
 from yaml.loader import SafeLoader
@@ -13,6 +15,9 @@ st.set_page_config(page_title="Miriel", page_icon="💬", layout="wide")
 with open("./auth.yaml") as file:
     config = yaml.load(file, Loader=SafeLoader)
 
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 authenticator = stauth.Authenticate(
     config["credentials"],
     config["cookie"]["name"],
@@ -20,21 +25,21 @@ authenticator = stauth.Authenticate(
     config["cookie"]["expiry_days"],
 )
 
-if "column_data" not in st.session_state:
-    st.session_state.column_data = []
+if "column_data" not in ss:
+    ss.column_data = []
 
 
-if "chats" not in st.session_state:
-    st.session_state.chats = {}
+if "chats" not in ss:
+    ss.chats = {}
 
-if "messages" not in st.session_state:
-    st.session_state.messages = {}
+if "messages" not in ss:
+    ss.messages = {}
 
-if "current_chat_id" not in st.session_state:
-    st.session_state.current_chat_id = None
+if "current_chat_id" not in ss:
+    ss.current_chat_id = None
 
-if "new_chat_name" not in st.session_state:
-    st.session_state.new_chat_name = ""
+if "new_chat_name" not in ss:
+    ss.new_chat_name = ""
 
 
 # def login():
@@ -45,6 +50,7 @@ if "new_chat_name" not in st.session_state:
 
 def upload_pdf_to_backend(file, chat_id, ocr_method: str):
     try:
+        logger.info(f"Uploading PDF to backend with OCR method: {ocr_method}")
         response = requests.post(
             "http://localhost:8000/upload_pdf",
             files={"file": (file.name, file, "application/pdf")},
@@ -53,38 +59,40 @@ def upload_pdf_to_backend(file, chat_id, ocr_method: str):
         if response.status_code == 201:
             response_data = response.json()
             # Store the PDF ID and update chat status
-            st.session_state.chats[chat_id].update(
+            ss.chats[chat_id].update(
                 {
                     "pdf_id": response_data["pdf_id"],
                     "has_pdf": True,
                     "pdf_name": file.name,
                 }
             )
+            logger.info(f"PDF uploaded to backend: {response_data['pdf_id']}")
             return True
         return False
     except Exception as e:
-        st.error(f"Error uploading PDF: {str(e)}")
+        logger.error(f"Error uploading PDF to backend: {str(e)}")
+        st.error("Error uploading PDF to backend")
         return False
 
 
 def create_new_chat():
-    if not st.session_state.new_chat_name:
+    if not ss.new_chat_name:
         return
 
     chat_id = str(uuid.uuid4())
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    st.session_state.chats[chat_id] = {
+    ss.chats[chat_id] = {
         "id": chat_id,
-        "name": st.session_state.new_chat_name,
+        "name": ss.new_chat_name,
         "created_at": timestamp,
         "has_pdf": False,  # Track if PDF is uploaded
         "summary_generated": False,  # Track if summary has been generated
     }
-
-    st.session_state.current_chat_id = chat_id
-    st.session_state.messages[chat_id] = []
-    st.session_state.messages[chat_id].append(
+    logger.info(f"Created new chat: {ss.chats[chat_id]}")
+    ss.current_chat_id = chat_id
+    ss.messages[chat_id] = []
+    ss.messages[chat_id].append(
         {
             "role": "system",
             "content": "Please upload a PDF document to begin the conversation.",
@@ -92,27 +100,30 @@ def create_new_chat():
     )
 
     # Clear the input field
-    st.session_state.new_chat_name = ""
+    ss.new_chat_name = ""
 
 
 def select_chat(chat_id):
-    st.session_state.current_chat_id = chat_id
+    ss.current_chat_id = chat_id
 
 
 def send_message():
-    if not st.session_state.user_input or not st.session_state.current_chat_id:
+    if not ss.user_input or not ss.current_chat_id:
         return
 
-    chat_id = st.session_state.current_chat_id
-    user_message = st.session_state.user_input
-    pdf_id = st.session_state.chats[chat_id].get("pdf_id")
-
+    chat_id = ss.current_chat_id
+    user_message = ss.user_input
+    pdf_id = ss.chats[chat_id].get("pdf_id")
+    logger.info(
+        f"Creating new message for chat with id: {chat_id}, user message: {user_message}, pdf_id: {pdf_id}"
+    )
     if not pdf_id:
+        logger.error("No PDF associated with this chat. Please upload a PDF first.")
         st.error("No PDF associated with this chat. Please upload a PDF first.")
         return
 
     # Add user message to chat
-    st.session_state.messages[chat_id].append({"role": "user", "content": user_message})
+    ss.messages[chat_id].append({"role": "user", "content": user_message})
 
     try:
         # Send question to backend with PDF ID
@@ -129,18 +140,21 @@ def send_message():
             answer = response.json().get(
                 "answer", "Sorry, I couldn't process your question."
             )
-            st.session_state.messages[chat_id].append(
-                {"role": "assistant", "content": answer}
-            )
+            ss.messages[chat_id].append({"role": "assistant", "content": answer})
+            logger.info(f"Answer received from backend: {answer}")
         else:
-            st.session_state.messages[chat_id].append(
+            ss.messages[chat_id].append(
                 {
                     "role": "assistant",
                     "content": "Sorry, I encountered an error processing your question.",
                 }
             )
+            logger.error(
+                f"Error processing your question: {response.status_code}, {response.text}"
+            )
     except Exception as e:
-        st.session_state.messages[chat_id].append(
+        logger.error(f"Error processing your question: {str(e)}")
+        ss.messages[chat_id].append(
             {
                 "role": "assistant",
                 "content": f"Error processing your question: {str(e)}",
@@ -148,48 +162,49 @@ def send_message():
         )
 
     # Clear the input
-    st.session_state.user_input = ""
+    ss.user_input = ""
 
 
 def insert_column_data(data_item):
-    if not st.session_state.current_chat_id:
+    if not ss.current_chat_id:
         return
 
-    chat_id = st.session_state.current_chat_id
+    chat_id = ss.current_chat_id
 
-    st.session_state.messages[chat_id].append(
+    ss.messages[chat_id].append(
         {"role": "user", "content": f"Tell me about: {data_item}"}
     )
 
     bot_response = (
         f"Here's information about {data_item}. This is a placeholder response."
     )
-    st.session_state.messages[chat_id].append(
-        {"role": "assistant", "content": bot_response}
-    )
+    ss.messages[chat_id].append({"role": "assistant", "content": bot_response})
 
 
 def delete_chat(chat_id):
-    if chat_id in st.session_state.chats:
-        del st.session_state.chats[chat_id]
-    if chat_id in st.session_state.messages:
-        del st.session_state.messages[chat_id]
-    if st.session_state.current_chat_id == chat_id:
-        st.session_state.current_chat_id = None
+    logger.info(f"Deleting chat with id: {chat_id}")
+    if chat_id in ss.chats:
+        del ss.chats[chat_id]
+    if chat_id in ss.messages:
+        del ss.messages[chat_id]
+    if ss.current_chat_id == chat_id:
+        ss.current_chat_id = None
     st.rerun()
 
 
 def clear_all_data():
-    st.session_state.chats = {}
-    st.session_state.messages = {}
-    st.session_state.current_chat_id = None
+    logger.info("Clearing all chat data")
+    ss.chats = {}
+    ss.messages = {}
+    ss.current_chat_id = None
     st.rerun()
 
 
 def generate_summary(chat_id):
-    pdf_id = st.session_state.chats[chat_id].get("pdf_id")
+    pdf_id = ss.chats[chat_id].get("pdf_id")
 
     if not pdf_id:
+        logger.error("No PDF associated with this chat. Please upload a PDF first.")
         st.error("No PDF associated with this chat. Please upload a PDF first.")
         return
 
@@ -198,34 +213,39 @@ def generate_summary(chat_id):
             "http://localhost:8000/summarize/",
             json={"pdf_id": pdf_id, "summary_length": 200},  # Default summary length
         )
-
+        logger.info(f"Summary response: {response.json()}")
         if response.status_code == 200:
             summary = response.json().get(
                 "summary", "Sorry, I couldn't generate a summary."
             )
-            st.session_state.messages[chat_id].append(
+            ss.messages[chat_id].append(
                 {
                     "role": "assistant",
                     "content": f"Here's a summary of the document:\n\n{summary}",
                 }
             )
+            logger.info(f"Summary generated: {summary}")
             # Mark summary as generated
             # st.session_state.chats[chat_id]["summary_generated"] = True
         else:
-            st.session_state.messages[chat_id].append(
+            ss.messages[chat_id].append(
                 {
                     "role": "assistant",
                     "content": "Sorry, I encountered an error generating the summary.",
                 }
             )
+            logger.error(
+                f"Error generating summary: {response.status_code}, {response.text}"
+            )
     except Exception as e:
-        st.session_state.messages[chat_id].append(
+        ss.messages[chat_id].append(
             {
                 "role": "assistant",
                 "content": f"Error generating summary: {str(e)}",
             }
         )
-    st.session_state.chats[chat_id]["summary_generated"] = True
+        logger.error(f"Error generating summary: {str(e)}")
+    ss.chats[chat_id]["summary_generated"] = True
 
 
 # def render_main_app(authenticator: stauth.Authenticate):
@@ -244,10 +264,10 @@ with left_col:
     st.divider()
     st.subheader("Your Chats")
 
-    if not st.session_state.chats:
+    if not ss.chats:
         st.info("No chats yet. Create a new chat to get started!")
 
-    for chat_id, chat in st.session_state.chats.items():
+    for chat_id, chat in ss.chats.items():
         col1, col2 = st.columns([3, 1])
         with col1:
             if st.button(
@@ -260,7 +280,7 @@ with left_col:
             if st.button("🗑️", key=f"delete_{chat_id}"):
                 delete_chat(chat_id)
 
-    if st.session_state.chats:
+    if ss.chats:
         st.divider()
         if st.button("Clear All Chats", type="secondary"):
             clear_all_data()
@@ -271,36 +291,42 @@ with middle_col:
     chat_container = st.container(height=500, border=True)
 
     with chat_container:
-        if st.session_state.current_chat_id:
-            chat_id = st.session_state.current_chat_id
-            chat = st.session_state.chats[chat_id]
-            user_input = st.session_state["user_input"] = ""
+        if ss.current_chat_id:
+            chat_id = ss.current_chat_id
+            chat = ss.chats[chat_id]
+            user_input = ss["user_input"] = ""
 
             st.subheader(f"Chat: {chat['name']}")
-
-            # Show current PDF info if one is uploaded
-            if chat.get("has_pdf", False):
-                st.info(
-                    f"📄 Current PDF: {chat.get('pdf_name')} (ID: {chat.get('pdf_id')})"
-                )
 
             # Show PDF upload prompt if no PDF is uploaded yet
             if not chat.get("has_pdf", False):
                 with st.status("Upload a PDF document", expanded=True) as upload_status:
                     ocr_method = st.selectbox(
-                        "Select OCR method",
+                        "Select parsing method",
                         options=["mistral", "docling"],
                         index=1,
                     )
+                    logger.info(f"Selected OCR method: {ocr_method}")
+                    chunking_strategy = st.selectbox(
+                        "Select chunking strategy",
+                        options=["fixed-size", "recursive", "semantic"],
+                        index=1,
+                    )
+                    logger.info(f"Selected chunking strategy: {chunking_strategy}")
+                    vector_store = st.selectbox(
+                        "Select vector store",
+                        options=["pinecone", "chroma", "naive"],
+                        index=1,
+                    )
+                    logger.info(f"Selected vector store: {vector_store}")
 
                     uploaded_file = st.file_uploader(
                         "Upload a PDF document",
                         type=["pdf"],
-                        key=f"{chat}.has_pdf",
                     )
                     if uploaded_file is not None:
                         if upload_pdf_to_backend(uploaded_file, chat_id, ocr_method):
-                            st.session_state.messages[chat_id].append(
+                            ss.messages[chat_id].append(
                                 {
                                     "role": "system",
                                     "content": f"PDF '{uploaded_file.name}' has been uploaded and processed. You can now ask questions about the document.",
@@ -311,16 +337,22 @@ with middle_col:
                                 state="complete",
                                 expanded=False,
                             )
+                            ss.chats[chat_id]["has_pdf"] = True
                             st.rerun()
                         else:
                             upload_status.update(
                                 label="Failed to upload PDF",
                                 state="error",
                             )
+                            ss.chats[chat_id]["has_pdf"] = False
             else:
 
+                st.info(
+                    f"📄 Current PDF: {chat.get('pdf_name')} (ID: {chat.get('pdf_id')})"
+                )
+
                 # Show messages
-                for message in st.session_state.messages.get(chat_id, []):
+                for message in ss.messages.get(chat_id, []):
                     if message["role"] == "user":
                         st.chat_message("user").write(message["content"])
                     elif message["role"] == "system":
