@@ -13,11 +13,11 @@ logger = logging.getLogger(__name__)
 class LLMManager:
     def __init__(self):
         self.model_config = {
-            "gpt-3.5-turbo": os.getenv("OPENAI_API_KEY"),
+            "openai/gpt-3.5-turbo": os.getenv("OPENAI_API_KEY"),
             "gemini/gemini-2.0-flash": os.getenv("GEMINI_API_KEY"),
-            "deepseek-chat": os.getenv("DEEPSEEK_API_KEY"),
-            "claude-3-7-sonnet-20250219": os.getenv("ANTHROPIC_API_KEY"),
-            "grok-2-latest": os.getenv("XAI_API_KEY")
+            "deepseek/deepseek-chat": os.getenv("DEEPSEEK_API_KEY"),
+            "anthropic/claude-3-7-sonnet-20250219": os.getenv("ANTHROPIC_API_KEY"),
+            "xai/grok-2-latest": os.getenv("XAI_API_KEY")
         }
         # Validate environment variables
         for model, key in self.model_config.items():

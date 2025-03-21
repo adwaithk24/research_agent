@@ -22,7 +22,6 @@ from typing import Optional
 
 from .redis_manager import (
     send_to_redis_stream, 
-    get_pdf_content,
     receive_llm_response
 )
 from .pipelines import (

@@ -8,7 +8,7 @@ from .llm_manager import LLMManager
 from .redis_manager import (
     receive_from_redis_stream, 
     send_to_redis_stream, 
-    get_pdf_content, 
+    get_pdf_content_from_redis, 
     set_stream_checkpoint
 )
 
@@ -34,7 +34,7 @@ class LLMService:
             
             try:
                 # Get PDF content from Redis with improved error handling
-                pdf_content = await get_pdf_content(pdf_id)
+                pdf_content = await get_pdf_content_from_redis(pdf_id)
                 context = pdf_content.decode('utf-8')
                 
                 answer, usage_metrics = await self.llm_manager.ask_question(
@@ -75,7 +75,7 @@ class LLMService:
                 raise ValueError('PDF ID is required')
             
             # Get PDF content from Redis
-            pdf_content = await get_pdf_content(pdf_id)
+            pdf_content = await get_pdf_content_from_redis(pdf_id)
             if not pdf_content:
                 raise ValueError('PDF content not found')
             
