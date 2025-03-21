@@ -5,26 +5,21 @@ from io import BytesIO
 from pathlib import Path
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-from fastapi import (
-    FastAPI,
-    UploadFile,
-    HTTPException,
-    status,
-    BackgroundTasks,
-    Query
-)
+from fastapi import FastAPI, UploadFile, HTTPException, status, BackgroundTasks, Query
 from fastapi.responses import FileResponse, StreamingResponse
 import logging
 
+from rag_pipeline import RAGPipeline
+
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
 
 from .redis_manager import (
     send_to_redis_stream, 
     receive_llm_response
 )
-from .pipelines import (
+from pipelines import (
     store_uploaded_pdf,
     get_pdf_content,
     standardize_docling,
@@ -43,20 +38,22 @@ app = FastAPI()
 # LLM Service instance
 llm_service = None
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     global llm_service
-    from .llm_service import LLMService
-    
+    from llm_service import LLMService
+
     llm_service = LLMService()
     asyncio.create_task(llm_service.start())
     logger.info("LLM Service started")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down LLM Service")
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -79,13 +76,21 @@ class SummaryRequest(BaseModel):
     pdf_id: str = Field(..., min_length=8, max_length=100)
     summary_length: int = Field(200, gt=50, lt=1000)
     max_tokens: int = Field(500, gt=100, lt=2000)
-    model: str = Field("gemini/gemini-2.0-flash", description="LLM model to use for summary generation")
-    
+    model: str = Field(
+        "gemini/gemini-2.0-flash", description="LLM model to use for summary generation"
+    )
+
+
 class QuestionRequest(BaseModel):
     pdf_id: str
     question: str = Field(..., min_length=10)
     max_tokens: int = Field(500, gt=100, lt=2000)
-    model: str = Field("gemini/gemini-2.0-flash", description="LLM model to use for question answering")
+    model: str = Field(
+        "gemini/gemini-2.0-flash", description="LLM model to use for question answering"
+    )
+
+
+active_rag_pipelines = {}
 
 
 @app.post("/processurl/", status_code=status.HTTP_200_OK)
@@ -414,7 +419,7 @@ async def process_url_enterprise(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-   
+
 
 @app.post("/select_pdfcontent", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
 async def select_pdf_content(request: PDFSelection):
@@ -429,105 +434,156 @@ async def select_pdf_content(request: PDFSelection):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/upload_pdf", status_code=status.HTTP_201_CREATED, tags=["Assignment 4"])
-async def upload_pdf(file: UploadFile):
+async def upload_pdf(
+    file: UploadFile,
+    parser: Literal["docling", "mistral"],
+    chunking_strategy: Literal["recursive", "semantic", "fixed"],
+    vector_store: Literal["chroma", "pinecone", "naive"],
+):
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Invalid file type")
 
     try:
         contents = await file.read()
-        pdf_id = store_uploaded_pdf(contents, "mistral")
+        pdf_id = store_uploaded_pdf(contents, parser)
         contents = get_pdf_content(pdf_id)
-        
+        rag_pipeline = RAGPipeline(
+            pdf_id=pdf_id,
+            text=contents,
+            chunking_strategy=chunking_strategy,
+            vector_store=vector_store,
+        )
+        rag_pipeline.process()
+        logger.info(f"PDF {pdf_id} processed")
+        active_rag_pipelines[pdf_id] = rag_pipeline
+
         # Send text content to stream for processing
-        try:
-            await send_to_redis_stream('pdf_content', {
-                'pdf_id': pdf_id,
-                'content': contents,
-            })
-            logger.info(f"PDF {pdf_id} content sent to stream")
-        except Exception as e:
-            logger.error(f"Failed to process PDF: {str(e)}")
-            raise
+        # try:
+
+        # await send_to_redis_stream(
+        #     "pdf_content",
+        #     {
+        #         "pdf_id": pdf_id,
+        #         "content": contents,
+        #     },
+        # )
+        #     logger.info(f"PDF {pdf_id} content sent to stream")
+        # except Exception as e:
+        #     logger.error(f"Failed to process PDF: {str(e)}")
+        #     raise
         return PDFUploadResponse(
             pdf_id=pdf_id, status="success", message=f"PDF stored with ID: {pdf_id}"
         )
     except Exception as e:
+        logger.error(f"Failed to process PDF: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         await file.close()
 
+
 @app.post("/summarize/", response_model=dict, tags=["Assignment 4"])
 async def generate_summary(request: SummaryRequest):
-    logger = logging.getLogger(__name__)
+    # logger = logging.getLogger(__name__)
 
     try:
 
         # Send request to Redis stream and wait for response
         try:
-            await send_to_redis_stream('llm_requests', {
-                'type': 'summary',
-                'pdf_id': request.pdf_id,
-                'max_tokens': request.max_tokens,
-                'model': request.model
-            })
-            
+            await send_to_redis_stream(
+                "pdf_content",
+                {
+                    "pdf_id": request.pdf_id,
+                    "content": get_pdf_content(request.pdf_id),
+                },
+            )
+            await send_to_redis_stream(
+                "llm_requests",
+                {
+                    "type": "summary",
+                    "pdf_id": request.pdf_id,
+                    "max_tokens": request.max_tokens,
+                    "model": request.model,
+                },
+            )
+
             response = await receive_llm_response()
             if not response:
                 raise HTTPException(status_code=408, detail="LLM response timeout")
 
             # Extract usage metrics from response
-            usage_metrics = response.get('usage', {})
+            usage_metrics = response.get("usage", {})
             if not usage_metrics:
                 logger.warning("No usage metrics found in response")
 
             return {
-                "summary": response.get('content', ''), 
+                "summary": response.get("content", ""),
                 "usage_metrics": {
-                "input_tokens": usage_metrics.get('input_tokens', 0),
-                "output_tokens": usage_metrics.get('output_tokens', 0),
-                "total_tokens": usage_metrics.get('total_tokens', 0),
-                "cost": usage_metrics.get('cost', 0.0)
-                }   
+                    "input_tokens": usage_metrics.get("input_tokens", 0),
+                    "output_tokens": usage_metrics.get("output_tokens", 0),
+                    "total_tokens": usage_metrics.get("total_tokens", 0),
+                    "cost": usage_metrics.get("cost", 0.0),
+                },
             }
-            
+
         except Exception as e:
             logger.error(f"LLM processing failed: {str(e)}")
             raise HTTPException(status_code=500, detail="Summary generation failed")
-            
+
     except FileNotFoundError as e:
         logger.error(f"PDF content lookup failed: {str(e)}")
         raise HTTPException(status_code=404, detail="PDF content not found")
 
+
 @app.post("/ask_question", status_code=status.HTTP_200_OK, tags=["Assignment 4"])
 async def answer_pdf_question(request: QuestionRequest):
-    logger = logging.getLogger(__name__)
+    # logger = logging.getLogger(__name__)
+    if request.pdf_id not in active_rag_pipelines:
+        raise HTTPException(status_code=404, detail="PDF not found")
     try:
-        await send_to_redis_stream('llm_requests', {
-            'type': 'question',
-            'pdf_id': request.pdf_id,
-            'question': request.question,
-            'max_tokens': request.max_tokens,
-            'model': request.model
-        })
-            
+        rag_pipeline: RAGPipeline = active_rag_pipelines[request.pdf_id]
+        relevant_chunks = rag_pipeline.get_relevant_chunks(request.question, 5)
+        logger.info(f"PDF {request.pdf_id} retrieved {len(relevant_chunks)} chunks")
+        context = "\n\n".join(relevant_chunks)
+        logger.info(f"PDF {request.pdf_id} context: {context}")
+        await send_to_redis_stream(
+            "pdf_content",
+            {
+                "pdf_id": request.pdf_id,
+                "content": context,
+            },
+        )
+        logger.info(f"PDF {request.pdf_id} context sent to stream")
+        await send_to_redis_stream(
+            "llm_requests",
+            {
+                "type": "question",
+                "pdf_id": request.pdf_id,
+                "question": request.question,
+                "max_tokens": request.max_tokens,
+            },
+        )
+        logger.info(f"Question {request.question} sent to stream")
         response = await receive_llm_response()
         if not response:
             raise HTTPException(status_code=408, detail="LLM response timeout")
-            
+
         # Extract content from response
-        content = response.get('content')
+        content = response.get("content")
         if not content:
             logger.error(f"Missing content in response: {response}")
-            raise HTTPException(status_code=500, detail="Invalid response format from LLM service")
-        
+            raise HTTPException(
+                status_code=500, detail="Invalid response format from LLM service"
+            )
+
         # Check response status
-        if response.get('status') != 'success':
+        if response.get("status") != "success":
             logger.error(f"Failed response status: {response}")
             raise HTTPException(status_code=500, detail="LLM service processing failed")
 
         # Extract usage metrics from response
-        usage_metrics = response.get('usage', {})
+        usage_metrics = response.get("usage", {})
         if not usage_metrics:
             logger.warning("No usage metrics found in response")
 
@@ -536,16 +592,17 @@ async def answer_pdf_question(request: QuestionRequest):
             "answer": content,
             "source_pdf": request.pdf_id,
             "usage_metrics": {
-                "input_tokens": usage_metrics.get('input_tokens', 0),
-                "output_tokens": usage_metrics.get('output_tokens', 0),
-                "total_tokens": usage_metrics.get('total_tokens', 0),
-                "cost": usage_metrics.get('cost', 0.0)
+                "input_tokens": usage_metrics.get("input_tokens", 0),
+                "output_tokens": usage_metrics.get("output_tokens", 0),
+                "total_tokens": usage_metrics.get("total_tokens", 0),
+                "cost": usage_metrics.get("cost", 0.0),
             },
-            "status": "success"
+            "status": "success",
         }
     except Exception as e:
         logger.error(f"LLM processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Question answering failed")
+
 
 def create_zip_archive(result, include_markdown, include_images, include_tables):
     flag = False

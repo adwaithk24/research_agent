@@ -1,6 +1,7 @@
 .venv/
 backend/temp_processing/
-backend/__pycache__/
-backend/.backend/
+__pycache__/
 temp_processing/
+.backend/
 .env
+backend/chroma_db/
