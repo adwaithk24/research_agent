@@ -6,7 +6,6 @@ import logging
 
 import streamlit as st
 from streamlit import session_state as ss
-import streamlit_authenticator as stauth
 import yaml
 from yaml.loader import SafeLoader
 
@@ -17,13 +16,6 @@ with open("./auth.yaml") as file:
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
-
-authenticator = stauth.Authenticate(
-    config["credentials"],
-    config["cookie"]["name"],
-    config["cookie"]["key"],
-    config["cookie"]["expiry_days"],
-)
 
 if "column_data" not in ss:
     ss.column_data = []
@@ -285,8 +277,6 @@ def generate_summary(chat_id):
     ss.chats[chat_id]["summary_generated"] = True
 
 
-# def render_main_app(authenticator: stauth.Authenticate):
-authenticator.logout()
 left_col, middle_col, right_col = st.columns([20, 60, 20])
 
 with left_col:
