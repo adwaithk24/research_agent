@@ -28,6 +28,31 @@ def kamradt_chunker(
     docs = text_splitter.split_text(markdown_text)
     return docs
 
+def character_chunk_text(text, chunk_size=384, overlap=50):
+    """
+    Split text into chunks based on character count.
+    
+    Args:
+        text: Text to split
+        chunk_size: Maximum number of characters per chunk
+        overlap: Number of overlapping characters between chunks
+    
+    Returns:
+        List of text chunks
+    """
+    chunks = []
+    stride = chunk_size - overlap
+    current_idx = 0
+    
+    while current_idx < len(text):
+        # Take chunk_size characters starting from current_idx
+        chunk = text[current_idx:current_idx + chunk_size]
+        if not chunk:  # Break if we're out of text
+            break
+        chunks.append(chunk)
+        current_idx += stride  # Move forward by stride
+    
+    return chunks
 
 if __name__ == "__main__":
     text = ""
